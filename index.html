@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="The Impossible Game - ein Remake von World's Hardest Game im Browser." />
+    <title>The Impossible Game</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23d4d0c8'/><rect x='8' y='8' width='16' height='16' fill='%23ff2d2d' stroke='%23000' stroke-width='3'/></svg>"
+    />
+  </head>
+  <body>
+    <div class="page">
+      <div class="masthead">
+        <h1>The Impossible Game</h1>
+        <p>Ein Remake von World&rsquo;s Hardest Game &middot; 6 Level &middot; keine Speicherpunkte</p>
+      </div>
+
+      <div class="screen">
+        <canvas id="game" width="800" height="540" tabindex="0" aria-label="Spielfeld"></canvas>
+      </div>
+
+      <div class="toolbar">
+        <button id="sound-toggle" class="button" type="button" aria-pressed="true">Ton: an</button>
+        <span class="toolbar__note">Der Ton startet aus Browser-Gr&uuml;nden erst nach der ersten Eingabe.</span>
+      </div>
+
+      <div class="columns">
+        <div class="col">
+          <h2>Steuerung</h2>
+          <table class="grid">
+            <tbody>
+              <tr>
+                <th scope="row">Pfeiltasten / W A S D</th>
+                <td>Bewegen</td>
+              </tr>
+              <tr>
+                <th scope="row">Leertaste</th>
+                <td>Menü best&auml;tigen</td>
+              </tr>
+              <tr>
+                <th scope="row">R</th>
+                <td>Level neu starten</td>
+              </tr>
+              <tr>
+                <th scope="row">P / Esc</th>
+                <td>Pause</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="col">
+          <h2>Regeln</h2>
+          <ul class="rules">
+            <li><span class="chip chip--player"></span> Du bist der rote W&uuml;rfel.</li>
+            <li><span class="chip chip--coin"></span> Sammle alle M&uuml;nzen eines Levels ein.</li>
+            <li><span class="chip chip--goal"></span> Das gr&uuml;ne Ziel &ouml;ffnet erst danach.</li>
+            <li><span class="chip chip--enemy"></span> Blau ber&uuml;hrt heisst: von vorn.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer">
+        Fan-Remake ohne Verbindung zu Snubby Land oder Stephen Critoph.
+        Quellcode auf GitHub.
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

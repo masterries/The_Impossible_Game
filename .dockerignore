@@ -1,0 +1,14 @@
+.git
+.github
+.claude
+node_modules
+dist
+.vite
+*.md
+.env
+.env.*
+!.env.example
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.gitignore

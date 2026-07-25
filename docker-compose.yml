@@ -1,0 +1,30 @@
+# Baut das Image aus dem Quellcode und hängt es an Traefik.
+# Für ein fertiges Image aus der GitHub Container Registry: docker-compose.ghcr.yml
+# Beide Dateien beschreiben denselben Container, also immer nur eine benutzen.
+
+name: impossible-game
+
+services:
+  impossible-game:
+    build:
+      context: .
+    image: impossible-game:local
+    container_name: impossible-game
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      - "traefik.http.routers.impossible-game.rule=Host(`${GAME_HOST:?GAME_HOST fehlt, siehe .env.example}`)"
+      - "traefik.http.routers.impossible-game.entrypoints=websecure"
+      - "traefik.http.routers.impossible-game.tls=true"
+      - "traefik.http.routers.impossible-game.tls.certresolver=letsencrypt"
+      - "traefik.http.services.impossible-game.loadbalancer.server.port=80"
+      - "traefik.http.services.impossible-game.loadbalancer.server.scheme=http"
+    networks:
+      - traefik-net
+
+networks:
+  traefik-net:
+    external: true

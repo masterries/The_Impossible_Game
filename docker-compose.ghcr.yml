@@ -1,0 +1,29 @@
+# Zieht das von GitHub Actions gebaute Image, ohne den Quellcode auf dem Server.
+# Verwendung: docker compose -f docker-compose.ghcr.yml up -d
+# Beide Compose-Dateien beschreiben denselben Container, also immer nur eine benutzen.
+
+name: impossible-game
+
+services:
+  impossible-game:
+    image: ${GAME_IMAGE:?GAME_IMAGE fehlt, siehe .env.example}
+    container_name: impossible-game
+    restart: unless-stopped
+    pull_policy: always
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      - "traefik.http.routers.impossible-game.rule=Host(`${GAME_HOST:?GAME_HOST fehlt, siehe .env.example}`)"
+      - "traefik.http.routers.impossible-game.entrypoints=websecure"
+      - "traefik.http.routers.impossible-game.tls=true"
+      - "traefik.http.routers.impossible-game.tls.certresolver=letsencrypt"
+      - "traefik.http.services.impossible-game.loadbalancer.server.port=80"
+      - "traefik.http.services.impossible-game.loadbalancer.server.scheme=http"
+    networks:
+      - traefik-net
+
+networks:
+  traefik-net:
+    external: true
