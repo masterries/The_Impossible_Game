@@ -5,6 +5,9 @@
   "type": "module",
   "description": "The Impossible Game - ein Browser-Remake von World's Hardest Game mit TypeScript, Vite und Canvas 2D",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "dev": "vite",
     "api": "node server/index.js",

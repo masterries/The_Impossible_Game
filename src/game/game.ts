@@ -29,7 +29,7 @@ import { Level } from './level';
 import { LEVELS } from './levels';
 import { Particles } from './particles';
 import { Player } from './player';
-import { Tile } from './types';
+import { Tile, type TileKind } from './types';
 
 type State = 'title' | 'ready' | 'playing' | 'dying' | 'levelComplete' | 'finished' | 'paused';
 
@@ -63,10 +63,14 @@ interface Box {
   h: number;
 }
 
-export interface RunResult {
+export interface RunProgress {
+  /** Levels cleared in this run so far, at least 1. */
+  levels: number;
+  totalLevels: number;
   deaths: number;
   durationMs: number;
-  levels: number;
+  /** True once the last level is cleared, which is what makes a run rankable. */
+  complete: boolean;
 }
 
 const BEST_KEY = 'impossible-game.best-deaths';
@@ -75,9 +79,15 @@ const BEST_KEY = 'impossible-game.best-deaths';
 const PAUSE_BUTTON: Box = { x: 700, y: 12, w: 40, h: 34 };
 const RESTART_BUTTON: Box = { x: 746, y: 12, w: 40, h: 34 };
 
-/** Same buttons on a phone, where every logical pixel is worth far less. */
-const PAUSE_BUTTON_SMALL: Box = { x: 648, y: 8, w: 66, h: 44 };
-const RESTART_BUTTON_SMALL: Box = { x: 722, y: 8, w: 66, h: 44 };
+/**
+ * Same buttons on a phone. The status bar is only 60 logical pixels tall, which
+ * at phone scale is around 25 CSS pixels, so the drawn button can never reach a
+ * comfortable finger size. The hit area is therefore padded well beyond what is
+ * drawn (see HIT_PADDING_COMPACT).
+ */
+const PAUSE_BUTTON_SMALL: Box = { x: 640, y: 4, w: 70, h: 52 };
+const RESTART_BUTTON_SMALL: Box = { x: 718, y: 4, w: 70, h: 52 };
+const HIT_PADDING_COMPACT = 16;
 
 /**
  * Below this display scale the canvas is small enough that the regular text
@@ -98,8 +108,8 @@ export class Game {
 
   /** Fired when a fresh run starts, used to request a scoreboard ticket. */
   onRunStart: (() => void) | null = null;
-  /** Fired once all levels are cleared. */
-  onRunFinish: ((result: RunResult) => void) | null = null;
+  /** Fired after every cleared level, so partial runs land on the board too. */
+  onProgress: ((progress: RunProgress) => void) | null = null;
 
   private levelIndex = 0;
   private level: Level;
@@ -184,22 +194,31 @@ export class Game {
 
   private completeLevel(): void {
     this.particles.burst(this.player.x, this.player.y, '#37d67a', 22, 220, 6);
-    if (this.levelIndex + 1 >= LEVELS.length) {
+
+    const cleared = this.levelIndex + 1;
+    const complete = cleared >= LEVELS.length;
+
+    if (complete) {
       if (this.best === null || this.deaths < this.best) {
         this.best = this.deaths;
         writeBest(this.deaths);
       }
       this.sfx.victory();
       this.setState('finished');
-      this.onRunFinish?.({
-        deaths: this.deaths,
-        durationMs: Math.round(this.runTime * 1000),
-        levels: LEVELS.length,
-      });
     } else {
       this.sfx.levelComplete();
       this.setState('levelComplete');
     }
+
+    // Reported for every level, not just the last one: a run that stops early
+    // still belongs on the board, just without a rank.
+    this.onProgress?.({
+      levels: cleared,
+      totalLevels: LEVELS.length,
+      deaths: this.deaths,
+      durationMs: Math.round(this.runTime * 1000),
+      complete,
+    });
   }
 
   /* ---------------------------------------------------------------- *
@@ -273,13 +292,15 @@ export class Game {
     const tap = this.pointer.takeTap();
     if (!tap) return false;
 
-    if (inside(tap, this.pauseBox)) {
+    const pad = this.compact ? HIT_PADDING_COMPACT : 0;
+
+    if (inside(tap, this.pauseBox, pad)) {
       if (this.state === 'playing') this.setState('paused');
       else if (this.state === 'paused') this.setState('playing');
       return false;
     }
 
-    if (inside(tap, this.restartBox)) {
+    if (inside(tap, this.restartBox, pad)) {
       if (this.state === 'playing' || this.state === 'dying' || this.state === 'paused') {
         this.restartLevel();
       }
@@ -323,6 +344,13 @@ export class Game {
     this.player.update(dt, this.moveAxis(), this.level);
 
     const half = this.player.half;
+
+    // A gate that closes on the player is fatal. It blinks first, so this is
+    // always something the player could see coming.
+    if (this.level.crushes(this.player.x, this.player.y, half)) {
+      this.die();
+      return;
+    }
 
     // Collect coins
     for (const coin of this.level.coins) {
@@ -391,6 +419,22 @@ export class Game {
         const tile = level.tileAt(c, r);
         if (tile === Tile.Void) continue;
         const even = (c + r) % 2 === 0;
+        const x = c * TILE;
+        const y = r * TILE;
+
+        if (tile === Tile.GateA || tile === Tile.GateB) {
+          this.drawGate(ctx, x, y, tile, even);
+          continue;
+        }
+
+        const push = level.pushAt(c, r);
+        if (push.x !== 0 || push.y !== 0) {
+          ctx.fillStyle = even ? COLORS.conveyorA : COLORS.conveyorB;
+          ctx.fillRect(x, y, TILE, TILE);
+          this.drawConveyor(ctx, x, y, push);
+          continue;
+        }
+
         ctx.fillStyle =
           tile === Tile.Floor
             ? even
@@ -399,7 +443,7 @@ export class Game {
             : even
               ? COLORS.zoneA
               : COLORS.zoneB;
-        ctx.fillRect(c * TILE, r * TILE, TILE, TILE);
+        ctx.fillRect(x, y, TILE, TILE);
       }
     }
 
@@ -442,12 +486,115 @@ export class Game {
       ctx.globalAlpha = 1;
     }
 
+    this.drawTeleports(ctx);
     this.drawCoins(ctx);
     this.drawEnemies(ctx);
     if (this.state !== 'dying') this.drawPlayer(ctx);
     this.particles.draw(ctx);
 
     ctx.restore();
+  }
+
+  /** A gate is either a hatched block or a dashed outline on the floor. */
+  private drawGate(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    tile: TileKind,
+    even: boolean,
+  ): void {
+    const level = this.level;
+    const closed = level.gateClosed(tile);
+    const blink = level.gateSwitchingSoon() && Math.floor(level.time * 10) % 2 === 0;
+
+    if (closed) {
+      ctx.fillStyle = blink ? COLORS.gateClosedHi : COLORS.gateClosed;
+      ctx.fillRect(x, y, TILE, TILE);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, TILE, TILE);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = -TILE; i < TILE; i += 11) {
+        ctx.moveTo(x + i, y + TILE);
+        ctx.lineTo(x + i + TILE, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    ctx.fillStyle = even ? COLORS.gateOpenA : COLORS.gateOpenB;
+    ctx.fillRect(x, y, TILE, TILE);
+    ctx.strokeStyle = blink ? COLORS.gateClosed : 'rgba(155, 59, 59, 0.45)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(x + 4.5, y + 4.5, TILE - 9, TILE - 9);
+    ctx.setLineDash([]);
+  }
+
+  /** Chevrons that scroll in the direction the belt drags. */
+  private drawConveyor(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    push: { x: number; y: number },
+  ): void {
+    const offset = ((this.level.time * 26) % 20) - 10;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, TILE, TILE);
+    ctx.clip();
+    ctx.translate(x + TILE / 2, y + TILE / 2);
+    ctx.rotate(Math.atan2(push.y, push.x));
+
+    ctx.strokeStyle = COLORS.conveyorArrow;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let i = -1; i <= 1; i++) {
+      const ox = i * 20 + offset;
+      ctx.beginPath();
+      ctx.moveTo(ox - 6, -7);
+      ctx.lineTo(ox + 2, 0);
+      ctx.lineTo(ox - 6, 7);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Teleporter pads, one colour per pair. */
+  private drawTeleports(ctx: CanvasRenderingContext2D): void {
+    for (const [index, slot] of this.level.teleportPair) {
+      const cx = ((index % COLS) + 0.5) * TILE;
+      const cy = (Math.floor(index / COLS) + 0.5) * TILE;
+      const color = COLORS.teleport[slot % COLORS.teleport.length]!;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(this.level.time * 1.8 + slot);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      ctx.strokeStyle = COLORS.wallLine;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 14, 0, TAU);
+      ctx.stroke();
+    }
   }
 
   private drawCoins(ctx: CanvasRenderingContext2D): void {
@@ -559,8 +706,8 @@ export class Game {
       let x = 14;
       for (const [label, value] of stats) {
         this.text(ctx, label, x, 17, scaleFont(FONT_LABEL, 1.5), COLORS.inkMuted);
-        this.readout(ctx, x, 21, 196, 32, value, scaleFont(FONT_VALUE, 1.55));
-        x += 208;
+        this.readout(ctx, x, 21, 188, 32, value, scaleFont(FONT_VALUE, 1.55));
+        x += 204;
       }
     } else {
       const stats: Array<[string, string]> = [
@@ -666,7 +813,7 @@ export class Game {
             {
               text:
                 this.best === null
-                  ? 'Six levels, no checkpoints.'
+                  ? `${LEVELS.length} levels, no checkpoints.`
                   : `Your best run so far: ${this.best} deaths`,
               font: FONT_BODY_BOLD,
               space: 16,
@@ -695,6 +842,13 @@ export class Game {
           [
             { text: 'LEVEL CLEARED', font: FONT_HEAD },
             { text: `Deaths so far: ${this.deaths}`, font: FONT_BODY, space: 12 },
+            {
+              text: `On the board as unranked until level ${LEVELS.length} is done.`,
+              font: FONT_BODY,
+              color: COLORS.inkMuted,
+              space: 6,
+              compactHide: true,
+            },
           ],
           `Continue to level ${this.levelIndex + 2}`,
         );
@@ -906,9 +1060,12 @@ export class Game {
   }
 }
 
-function inside(point: Vec2, box: Box): boolean {
+function inside(point: Vec2, box: Box, pad = 0): boolean {
   return (
-    point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
+    point.x >= box.x - pad &&
+    point.x <= box.x + box.w + pad &&
+    point.y >= box.y - pad &&
+    point.y <= box.y + box.h + pad
   );
 }
 

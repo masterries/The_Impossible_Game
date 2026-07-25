@@ -4,8 +4,13 @@ import { clamp, type Vec2 } from './math';
 const DEAD_ZONE = 8;
 /** Distance at which the stick is fully deflected, also its drawn radius. */
 export const STICK_RANGE = 70;
-/** A touch shorter and tighter than this counts as a tap, not a drag. */
-const TAP_DISTANCE = 14;
+/**
+ * A touch shorter and tighter than this counts as a tap, not a drag. Measured
+ * in CSS pixels, not logical ones: on a phone the canvas is scaled down by more
+ * than half, so a logical threshold would be tighter than the finger wobble the
+ * browser itself tolerates.
+ */
+const TAP_DISTANCE_CSS = 12;
 const TAP_DURATION_MS = 400;
 
 /**
@@ -21,7 +26,10 @@ export class PointerInput {
   private readonly current: Vec2 = { x: 0, y: 0 };
   private readonly vector: Vec2 = { x: 0, y: 0 };
   private startedAt = 0;
-  private moved = 0;
+  /** Furthest the pointer strayed from its origin, in CSS pixels. */
+  private movedCss = 0;
+  private originClientX = 0;
+  private originClientY = 0;
   private pendingTap: Vec2 | null = null;
 
   constructor(
@@ -45,8 +53,19 @@ export class PointerInput {
   }
 
   private readonly onDown = (event: PointerEvent): void => {
-    if (this.pointerId !== null) return;
+    // A second finger takes over instead of being ignored. Otherwise lifting
+    // the first one would leave the still-resting second finger untracked and
+    // the player frozen.
+    if (this.pointerId !== null && this.pointerId !== event.pointerId) {
+      this.release(this.pointerId);
+    }
     event.preventDefault();
+
+    // Steering means the game has focus, not the name field next to it.
+    if (document.activeElement !== this.canvas) {
+      this.canvas.focus({ preventScroll: true });
+    }
+
     // Capture keeps the stick alive when the finger leaves the canvas. It can
     // throw for pointers the browser no longer tracks, which must not take the
     // rest of the input handling down with it.
@@ -60,7 +79,9 @@ export class PointerInput {
     this.current.x = this.origin.x;
     this.current.y = this.origin.y;
     this.startedAt = event.timeStamp;
-    this.moved = 0;
+    this.originClientX = event.clientX;
+    this.originClientY = event.clientY;
+    this.movedCss = 0;
     this.vector.x = 0;
     this.vector.y = 0;
   };
@@ -70,10 +91,14 @@ export class PointerInput {
     event.preventDefault();
     this.toLogical(event, this.current);
 
+    this.movedCss = Math.max(
+      this.movedCss,
+      Math.hypot(event.clientX - this.originClientX, event.clientY - this.originClientY),
+    );
+
     const dx = this.current.x - this.origin.x;
     const dy = this.current.y - this.origin.y;
     const distance = Math.hypot(dx, dy);
-    this.moved = Math.max(this.moved, distance);
 
     if (distance <= DEAD_ZONE) {
       this.vector.x = 0;
@@ -89,7 +114,7 @@ export class PointerInput {
     if (event.pointerId !== this.pointerId) return;
     event.preventDefault();
     const quick = event.timeStamp - this.startedAt <= TAP_DURATION_MS;
-    if (quick && this.moved <= TAP_DISTANCE) {
+    if (quick && this.movedCss <= TAP_DISTANCE_CSS) {
       this.pendingTap = { x: this.origin.x, y: this.origin.y };
     }
     this.release(event.pointerId);
@@ -111,7 +136,7 @@ export class PointerInput {
     this.pointerId = null;
     this.vector.x = 0;
     this.vector.y = 0;
-    this.moved = 0;
+    this.movedCss = 0;
   }
 
   /** Steering direction, length 0 to 1. */

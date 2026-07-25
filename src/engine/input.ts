@@ -30,8 +30,9 @@ export class Input {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    // Never swallow keys aimed at a text field.
-    if (isTypingTarget(event.target)) return;
+    // Never swallow keys aimed at a form field or a button. Space has to keep
+    // activating the buttons next to the canvas.
+    if (isInteractiveTarget(event.target)) return;
     if (SWALLOW.has(event.code)) event.preventDefault();
     if (event.repeat) return;
     this.down.add(event.code);
@@ -104,8 +105,9 @@ export class Input {
   }
 }
 
-function isTypingTarget(target: EventTarget | null): boolean {
+const INTERACTIVE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A']);
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  return INTERACTIVE_TAGS.has(target.tagName) || target.isContentEditable;
 }

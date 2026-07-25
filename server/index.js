@@ -1,9 +1,13 @@
-/**
+﻿/**
  * Scoreboard API.
  *
  * Plain Node, no npm dependencies: node:http for the server, node:sqlite for
  * storage. Runs behind Traefik on the same host as the game, so every request
  * is same-origin and no CORS handling is needed by default.
+ *
+ * One row per run. The row appears as soon as the first level is cleared and is
+ * updated after every further level. A run that never reaches the last level
+ * stays in the table as unranked.
  */
 
 import { createServer } from 'node:http';
@@ -21,7 +25,7 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 
 /**
  * Signs run tickets. Without a fixed secret the tickets stop being valid on
- * restart, which only means players have to finish their run again.
+ * restart, which only means players have to start their run again.
  */
 const SECRET = process.env.SCORE_SECRET || randomUUID();
 if (!process.env.SCORE_SECRET) {
@@ -29,12 +33,12 @@ if (!process.env.SCORE_SECRET) {
 }
 
 const NAME_MAX = 16;
-const LEVEL_COUNT = 6;
+const LEVEL_COUNT = Number(process.env.LEVEL_COUNT) || 12;
 /**
- * A full run cannot plausibly be faster than this, so anything below is junk.
- * Overridable so the test suite does not have to wait half a minute.
+ * No level can plausibly be cleared faster than this, so anything below is
+ * junk. Overridable so the test suite does not have to wait half a minute.
  */
-const MIN_RUN_MS = Number(process.env.MIN_RUN_MS) || 25_000;
+const MIN_MS_PER_LEVEL = Number(process.env.MIN_MS_PER_LEVEL) || 4000;
 const MAX_RUN_MS = 6 * 60 * 60 * 1000;
 const MAX_DEATHS = 100_000;
 /** Tickets expire, so a stockpile of them is worthless. */
@@ -51,38 +55,71 @@ const db = new DatabaseSync(DB_PATH);
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA busy_timeout = 5000;
-
-  CREATE TABLE IF NOT EXISTS scores (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL,
-    deaths      INTEGER NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_scores_rank
-    ON scores (deaths ASC, duration_ms ASC, id ASC);
-
-  CREATE TABLE IF NOT EXISTS spent_tickets (
-    run_id  TEXT    PRIMARY KEY,
-    used_at INTEGER NOT NULL
-  );
 `);
 
-const insertScore = db.prepare(
-  'INSERT INTO scores (name, deaths, duration_ms, created_at) VALUES (?, ?, ?, ?)',
+migrate();
+
+function migrate() {
+  const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='scores'").get();
+  if (existing) {
+    const columns = db.prepare('PRAGMA table_info(scores)').all().map((c) => c.name);
+    if (!columns.includes('run_id') || !columns.includes('levels')) {
+      // Layout from before progress tracking. Keep the old rows around instead
+      // of dropping them, but start the new table clean.
+      console.warn('scores table has the old layout, renaming it to scores_legacy');
+      db.exec('ALTER TABLE scores RENAME TO scores_legacy');
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scores (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id      TEXT    NOT NULL UNIQUE,
+      name        TEXT    NOT NULL,
+      deaths      INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      levels      INTEGER NOT NULL,
+      complete    INTEGER NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scores_ranked
+      ON scores (complete, deaths ASC, duration_ms ASC, id ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_scores_progress
+      ON scores (complete, levels DESC, deaths ASC, duration_ms ASC, id ASC);
+  `);
+
+  // The old single-use ticket table is no longer needed: a run is identified by
+  // its run_id and progress may only ever move forward.
+  db.exec('DROP TABLE IF EXISTS spent_tickets');
+}
+
+const findRun = db.prepare('SELECT id, levels FROM scores WHERE run_id = ?');
+const insertRun = db.prepare(
+  `INSERT INTO scores (run_id, name, deaths, duration_ms, levels, complete, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 );
-const topScores = db.prepare(
-  'SELECT id, name, deaths, duration_ms, created_at FROM scores ORDER BY deaths ASC, duration_ms ASC, id ASC LIMIT ?',
+const updateRun = db.prepare(
+  `UPDATE scores SET name = ?, deaths = ?, duration_ms = ?, levels = ?, complete = ?, updated_at = ?
+   WHERE run_id = ?`,
 );
-const countScores = db.prepare('SELECT COUNT(*) AS total FROM scores');
+const rankedScores = db.prepare(
+  `SELECT id, name, deaths, duration_ms, levels, complete, updated_at FROM scores
+   WHERE complete = 1 ORDER BY deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
+);
+const unrankedScores = db.prepare(
+  `SELECT id, name, deaths, duration_ms, levels, complete, updated_at FROM scores
+   WHERE complete = 0 ORDER BY levels DESC, deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
+);
+const countComplete = db.prepare('SELECT COUNT(*) AS total FROM scores WHERE complete = 1');
+const countAll = db.prepare('SELECT COUNT(*) AS total FROM scores');
 const countBetter = db.prepare(
-  'SELECT COUNT(*) AS better FROM scores WHERE deaths < ? OR (deaths = ? AND duration_ms < ?)',
+  `SELECT COUNT(*) AS better FROM scores
+   WHERE complete = 1 AND (deaths < ? OR (deaths = ? AND duration_ms < ?))`,
 );
 const deleteScore = db.prepare('DELETE FROM scores WHERE id = ?');
-const spendTicket = db.prepare('INSERT INTO spent_tickets (run_id, used_at) VALUES (?, ?)');
-const findTicket = db.prepare('SELECT run_id FROM spent_tickets WHERE run_id = ?');
-const pruneTickets = db.prepare('DELETE FROM spent_tickets WHERE used_at < ?');
 
 /* -------------------------------------------------------------------------- */
 /* Run tickets                                                                 */
@@ -99,8 +136,8 @@ function signatureMatches(expected, given) {
 }
 
 /**
- * A ticket is handed out when a run starts and can be redeemed once. It proves
- * that enough wall-clock time passed on the server between start and finish.
+ * A ticket is handed out when a run starts and identifies that run for its
+ * whole lifetime. It proves how much wall-clock time passed on the server.
  * This is not authentication: it only stops replays and obviously faked times.
  */
 function issueTicket() {
@@ -121,7 +158,6 @@ function checkTicket({ runId, issuedAt, ticket }, durationMs) {
 
   // 15 % tolerance for clock drift and the delay before the score is sent.
   if (age < durationMs * 0.85) return 'run time does not match the ticket';
-  if (findTicket.get(runId)) return 'ticket was already redeemed';
 
   return null;
 }
@@ -131,6 +167,8 @@ function checkTicket({ runId, issuedAt, ticket }, durationMs) {
 /* -------------------------------------------------------------------------- */
 
 const buckets = new Map();
+/** Hard ceiling on tracked keys so the map cannot grow without bound. */
+const MAX_BUCKETS = 20_000;
 
 function rateLimit(key, limit, windowMs) {
   const now = Date.now();
@@ -138,6 +176,11 @@ function rateLimit(key, limit, windowMs) {
   if (hits.length >= limit) {
     buckets.set(key, hits);
     return false;
+  }
+  if (!buckets.has(key) && buckets.size >= MAX_BUCKETS) {
+    // Drop the oldest entry rather than refusing service.
+    const oldest = buckets.keys().next();
+    if (!oldest.done) buckets.delete(oldest.value);
   }
   hits.push(now);
   buckets.set(key, hits);
@@ -153,12 +196,22 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
+/**
+ * The address the rate limit counts against.
+ *
+ * Traefik appends the real peer to any X-Forwarded-For the client sent, so the
+ * LAST entry is the one written by our own proxy. Reading the first entry would
+ * let anyone pick their own bucket by sending a header. The value is capped in
+ * length so a long header cannot bloat the bucket map.
+ */
 function clientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim();
+    const entries = forwarded.split(',');
+    const last = entries[entries.length - 1].trim();
+    if (last) return last.slice(0, 64);
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  return (req.socket.remoteAddress ?? 'unknown').slice(0, 64);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -188,16 +241,20 @@ function validateScore(body) {
   if (name.length === 0) return { error: 'name must not be empty' };
 
   const { deaths, durationMs, levels } = body;
+  if (!Number.isInteger(levels) || levels < 1 || levels > LEVEL_COUNT) {
+    return { error: 'levels is out of range' };
+  }
   if (!Number.isInteger(deaths) || deaths < 0 || deaths > MAX_DEATHS) {
     return { error: 'deaths is out of range' };
   }
-  if (!Number.isInteger(durationMs) || durationMs < MIN_RUN_MS || durationMs > MAX_RUN_MS) {
+  if (
+    !Number.isInteger(durationMs) ||
+    durationMs < levels * MIN_MS_PER_LEVEL ||
+    durationMs > MAX_RUN_MS
+  ) {
     return { error: 'duration is out of range' };
   }
-  if (levels !== undefined && levels !== LEVEL_COUNT) {
-    return { error: 'run is incomplete' };
-  }
-  return { value: { name, deaths, durationMs } };
+  return { value: { name, deaths, durationMs, levels } };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -222,26 +279,41 @@ function send(res, status, payload) {
   res.end(body);
 }
 
+function badRequest(message, status = 400) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let aborted = false;
     const chunks = [];
     req.on('data', (chunk) => {
+      if (aborted) return;
       size += chunk.length;
       if (size > BODY_LIMIT) {
-        reject(new Error('body too large'));
-        req.destroy();
+        // Drain instead of destroying the socket, otherwise the 413 never
+        // reaches the client and they only see a connection reset.
+        aborted = true;
+        chunks.length = 0;
+        req.resume();
+        reject(badRequest('body too large', 413));
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (aborted) return;
       if (chunks.length === 0) return resolve({});
       try {
         const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        resolve(parsed && typeof parsed === 'object' ? parsed : {});
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return resolve({});
+        // Null prototype: keys like __proto__ stay plain data.
+        resolve(Object.assign(Object.create(null), parsed));
       } catch {
-        reject(new Error('body is not valid JSON'));
+        reject(badRequest('body is not valid JSON'));
       }
     });
     req.on('error', reject);
@@ -255,7 +327,9 @@ function toScore(row, rank) {
     name: row.name,
     deaths: row.deaths,
     durationMs: row.duration_ms,
-    createdAt: row.created_at,
+    levels: row.levels,
+    complete: row.complete === 1,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -278,11 +352,16 @@ async function handle(req, res) {
     if (!rateLimit(`get:${ip}`, 120, 60_000)) {
       return send(res, 429, { error: 'too many requests' });
     }
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 10, 1), 100);
-    const rows = topScores.all(limit);
+    // SQLite refuses to bind a non-integer to LIMIT, so truncate before clamping.
+    const requested = Math.trunc(Number(url.searchParams.get('limit')));
+    const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 100) : 10;
+
     return send(res, 200, {
-      scores: rows.map((row, i) => toScore(row, i + 1)),
-      total: countScores.get().total,
+      scores: rankedScores.all(limit).map((row, i) => toScore(row, i + 1)),
+      unranked: unrankedScores.all(limit).map((row) => toScore(row, null)),
+      levelCount: LEVEL_COUNT,
+      total: countComplete.get().total,
+      totalRuns: countAll.get().total,
     });
   }
 
@@ -294,7 +373,8 @@ async function handle(req, res) {
   }
 
   if (path === '/api/scores' && req.method === 'POST') {
-    if (!rateLimit(`post:${ip}`, 20, 60 * 60_000)) {
+    // Six levels means at most six writes per run, plus room for retries.
+    if (!rateLimit(`post:${ip}`, 120, 60 * 60_000)) {
       return send(res, 429, { error: 'too many requests' });
     }
 
@@ -302,7 +382,7 @@ async function handle(req, res) {
     try {
       body = await readJson(req);
     } catch (err) {
-      return send(res, 400, { error: err.message });
+      return send(res, err.status ?? 400, { error: err.message });
     }
 
     const { error, value } = validateScore(body);
@@ -315,26 +395,54 @@ async function handle(req, res) {
     if (ticketError) return send(res, 403, { error: ticketError });
 
     const now = Date.now();
-    try {
-      spendTicket.run(body.runId, now);
-    } catch {
-      // Unique constraint: two submissions raced for the same ticket.
-      return send(res, 403, { error: 'ticket was already redeemed' });
+    const complete = value.levels === LEVEL_COUNT ? 1 : 0;
+    const existing = findRun.get(body.runId);
+
+    if (!existing) {
+      insertRun.run(
+        body.runId,
+        value.name,
+        value.deaths,
+        value.durationMs,
+        value.levels,
+        complete,
+        now,
+        now,
+      );
+    } else if (value.levels > existing.levels) {
+      // Progress may only move forward, which also caps how often one ticket
+      // can write.
+      updateRun.run(
+        value.name,
+        value.deaths,
+        value.durationMs,
+        value.levels,
+        complete,
+        now,
+        body.runId,
+      );
+    } else {
+      return send(res, 409, { error: 'this run already reached that level' });
     }
-    pruneTickets.run(now - TICKET_TTL_MS);
 
-    const result = insertScore.run(value.name, value.deaths, value.durationMs, now);
-    const rank = countBetter.get(value.deaths, value.deaths, value.durationMs).better + 1;
-
-    return send(res, 201, {
-      id: Number(result.lastInsertRowid),
-      rank,
-      total: countScores.get().total,
+    const row = findRun.get(body.runId);
+    return send(res, existing ? 200 : 201, {
+      id: row.id,
+      rank: complete ? countBetter.get(value.deaths, value.deaths, value.durationMs).better + 1 : null,
+      levels: value.levels,
+      levelCount: LEVEL_COUNT,
+      complete: complete === 1,
+      total: countComplete.get().total,
+      totalRuns: countAll.get().total,
     });
   }
 
   const adminMatch = path.match(/^\/api\/scores\/(\d+)$/);
   if (adminMatch && req.method === 'DELETE') {
+    // Rate limited too, so the token cannot be guessed at full speed.
+    if (!rateLimit(`admin:${ip}`, 20, 60 * 60_000)) {
+      return send(res, 429, { error: 'too many requests' });
+    }
     if (!ADMIN_TOKEN) return send(res, 404, { error: 'not found' });
     const given = req.headers['x-admin-token'];
     if (typeof given !== 'string' || !signatureMatches(ADMIN_TOKEN, given)) {

@@ -1,11 +1,12 @@
-# The Impossible Game
+﻿# The Impossible Game
 
 A browser remake of World's Hardest Game. You steer a red cube, dodge blue balls, collect
-every coin and reach the green field. Six levels, no checkpoints, and a global scoreboard.
+every coin and reach the green field. Twelve levels, no checkpoints, and a global
+scoreboard.
 
 Built with TypeScript, Vite and Canvas 2D. No game engine, no images, no audio files:
-graphics and sound are generated at runtime. The bundle is about 30 kB of JavaScript
-(11 kB gzipped) plus 5 kB of CSS. The scoreboard API is plain Node with `node:sqlite` and
+graphics and sound are generated at runtime. The bundle is about 40 kB of JavaScript
+(14 kB gzipped) plus 6 kB of CSS. The scoreboard API is plain Node with `node:sqlite` and
 has no npm dependencies at all.
 
 ## Playing
@@ -20,12 +21,27 @@ has no npm dependencies at all.
 
 The green goal only opens once every coin in the level is collected; until then it pulses
 dark. Any hit resets the level, the coins and the enemies. Your personal best is kept in
-localStorage, and finishing all six levels submits your run to the scoreboard.
+localStorage, and clearing level 1 already puts the run on the scoreboard.
 
 On phones the game is played by dragging anywhere on the field: a virtual stick appears
 under your finger. Pause and restart sit as buttons in the status bar, so no keyboard is
 needed. When the canvas gets narrow the status bar and the dialogs switch to a larger
 layout, and the page suggests turning the phone sideways.
+
+The Fullscreen button hides the page around the game and asks for landscape. Where the
+Fullscreen API is unavailable, most notably iOS Safari, a CSS-only immersive mode does the
+same job inside the browser window.
+
+### Mechanics
+
+Levels 1 and 2 are plain. After that a mechanic joins every few levels and they start
+combining.
+
+| From level | Mechanic    | Behaviour                                                                       |
+| ---------- | ----------- | ------------------------------------------------------------------------------- |
+| 3          | Conveyors   | Striped tiles drag you at 110 px/s. You can walk against them, just not quickly.  |
+| 5          | Gates       | Two groups of red doors take turns. Standing in one when it closes kills you, and it blinks first. |
+| 9          | Teleporters | Matching rings are pairs. Step on one and you come out of the other.              |
 
 ## Developing
 
@@ -53,32 +69,51 @@ npm run api
 | `npm run typecheck` | `tsc --noEmit` only                           |
 | `npm test`          | Smoke test for the scoreboard API             |
 
-Both ports can be overridden with `PORT` and `API_PORT`. Without the API the game is fully
-playable, the board just reports that it is offline.
+Needs Node 22.13 or newer, because the API imports `node:sqlite` without a flag.
+
+`PORT` sets the port of whichever process you start. `API_PORT` only tells the dev server
+where to find the API, so moving the API means starting it with `PORT` and giving the dev
+server the same value as `API_PORT`. Without the API the game is fully playable, the board
+just reports that it is offline.
 
 ## Scoreboard
 
-Ranked by fewest deaths first, then by the faster run. Only complete runs of all six levels
-count.
+You are on the board as soon as you clear level 1. The entry is created there and updated
+after every further level, so it always shows how far that run got. Stop playing and it
+stays where it is, listed as unranked. Only a run that clears all twelve levels gets a rank,
+sorted by fewest deaths first, then by the faster time.
 
-| Route                   | Method | Purpose                                          |
-| ----------------------- | ------ | ------------------------------------------------ |
-| `/api/health`           | GET    | Liveness, also used by the container healthcheck |
-| `/api/scores?limit=10`  | GET    | Top entries, ranked                              |
-| `/api/runs`             | POST   | Issues a ticket for a run that is about to start  |
-| `/api/scores`           | POST   | Submits a finished run, needs a valid ticket     |
-| `/api/scores/<id>`      | DELETE | Removes one entry, needs `x-admin-token`         |
+The server owns the level count, so a client cannot claim completion early. It defaults to
+12 and can be overridden with the `LEVEL_COUNT` environment variable if you add levels.
+
+One row per run, not per player. A new run means a new row, so a bad attempt does not
+overwrite a good one. If no name is entered, the game picks one like `Player 4821` rather
+than dropping the run.
+
+| Route                   | Method | Purpose                                                     |
+| ----------------------- | ------ | ----------------------------------------------------------- |
+| `/api/health`           | GET    | Liveness, also used by the container healthcheck            |
+| `/api/scores?limit=10`  | GET    | Ranked entries plus the unranked ones                       |
+| `/api/runs`             | POST   | Issues a ticket for a run that is about to start             |
+| `/api/scores`           | POST   | Creates or updates this run's entry, needs a valid ticket    |
+| `/api/scores/<id>`      | DELETE | Removes one entry, needs `x-admin-token`                    |
+
+The ticket identifies a run for its whole lifetime. Submissions may only ever report a
+higher level than before, which is also what caps how often one ticket can write.
 
 ### About cheating
 
 There is no login, so the board cannot be trustworthy in a strict sense. What it does have:
 
-- The server issues a ticket when a run starts and checks on submission that enough real
-  time has passed on the server side. A ticket is signed with `SCORE_SECRET`, expires after
-  six hours and can be redeemed exactly once.
-- Names, death counts and run times are validated and clamped; runs under 25 seconds are
-  rejected outright.
-- Rate limits per IP: 20 submissions per hour, 120 reads per minute.
+- The server issues a ticket when a run starts and checks on every submission that enough
+  real time has passed on the server side. A ticket is signed with `SCORE_SECRET`, expires
+  after six hours and can only ever move its run forward.
+- Names, death counts and times are validated and clamped. Anything claiming less than four
+  seconds per cleared level is rejected outright.
+- Rate limits per IP: 120 submissions per hour (twelve levels plus room for retries), 120 reads
+  per minute, 20 admin deletes per hour. The address comes from the last `X-Forwarded-For`
+  entry, the one Traefik appends, so a client cannot pick its own bucket by sending the
+  header itself.
 
 That stops replays, curl spam and obviously faked times. It does not stop somebody who
 reads the client code and drives the API deliberately. If the board gets polluted, set
@@ -128,7 +163,8 @@ Clone the repository on the server, fill in the environment, start:
 cp .env.example .env
 ```
 
-Generate a signing secret and put it into `.env` as `SCORE_SECRET`:
+`SCORE_SECRET` ships empty on purpose, so Compose refuses to start until it is filled in.
+Generate one and put it into `.env`:
 
 ```bash
 openssl rand -hex 32
@@ -167,15 +203,22 @@ use one of them.
 
 ## Editing levels
 
-A level is a 20 × 12 character grid in [`src/game/levels.ts`](src/game/levels.ts):
+A level is a 20 Ã— 12 character grid in [`src/game/levels.ts`](src/game/levels.ts):
 
-| Character | Meaning         |
-| --------- | --------------- |
-| `#`       | Wall or void    |
-| `.`       | Floor           |
-| `S`       | Start zone      |
-| `E`       | End zone        |
-| `C`       | Coin            |
+| Character   | Meaning                                                     |
+| ----------- | ----------------------------------------------------------- |
+| `#`         | Wall or void                                                |
+| `.`         | Floor                                                       |
+| `S`         | Start zone                                                  |
+| `E`         | End zone                                                    |
+| `C`         | Coin                                                        |
+| `^ > v <`   | Conveyor floor, pushing that way                            |
+| `1` / `2`   | Gate of group A / B, the two alternate                      |
+| `a` `b` `c` | Teleporter, each letter used exactly twice to form a pair    |
+
+`gateCycle` sets the seconds for a full open-closed cycle. Coins that belong on a tile which
+already carries a mechanic go into the separate `coins` array as `[column, row]`, because
+one character per tile cannot hold both.
 
 Enemies are described by three helpers. Lengths are tiles, `speed` is tiles per second and
 `phase` (0 to 1) shifts the starting point within one cycle.
@@ -209,7 +252,7 @@ src/
   game/
     config.ts      constants
     types.ts       level and enemy data model
-    levels.ts      the six levels
+    levels.ts      the twelve levels
     level.ts       a loaded level: tiles, coins, zones, enemies
     enemy.ts       movement along polylines and circles
     player.ts      movement and wall collision

@@ -12,10 +12,12 @@
     />
   </head>
   <body>
+    <button id="exit-immersive" class="button exit-immersive" type="button">Exit fullscreen</button>
+
     <div class="page">
       <div class="masthead">
         <h1>The Impossible Game</h1>
-        <p>A remake of World&rsquo;s Hardest Game &middot; 6 levels &middot; no checkpoints</p>
+        <p>A remake of World&rsquo;s Hardest Game &middot; 12 levels &middot; no checkpoints</p>
       </div>
 
       <div class="screen">
@@ -25,6 +27,9 @@
       <p class="rotate-hint">Turn your phone sideways for a bigger playfield.</p>
 
       <div class="toolbar">
+        <button id="fullscreen-toggle" class="button" type="button" aria-pressed="false">
+          Fullscreen
+        </button>
         <button id="sound-toggle" class="button" type="button" aria-pressed="true">Sound: on</button>
         <span class="toolbar__note">
           Drag anywhere on the field to steer. Sound starts after your first input.
@@ -67,6 +72,9 @@
             <li><span class="chip chip--coin"></span> Collect every coin in the level.</li>
             <li><span class="chip chip--goal"></span> Only then does the green goal open.</li>
             <li><span class="chip chip--enemy"></span> Touching blue sends you back.</li>
+            <li><span class="chip chip--belt"></span> Striped tiles drag you along.</li>
+            <li><span class="chip chip--gate"></span> Red doors open and close in turns.</li>
+            <li><span class="chip chip--portal"></span> Matching rings teleport you.</li>
           </ul>
         </div>
       </div>
@@ -94,6 +102,7 @@
             <tr>
               <th scope="col" class="board__rank">#</th>
               <th scope="col">Player</th>
+              <th scope="col" class="board__num">Level</th>
               <th scope="col" class="board__num">Deaths</th>
               <th scope="col" class="board__num">Time</th>
             </tr>
@@ -102,7 +111,8 @@
         </table>
 
         <p class="board__note">
-          Ranked by fewest deaths, then fastest run. Finish all six levels to get on the board.
+          You get an entry as soon as you clear level 1. Stop early and it stays unranked;
+          finish all twelve levels and it is ranked by fewest deaths, then fastest run.
         </p>
       </div>
 

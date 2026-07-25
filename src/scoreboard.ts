@@ -10,11 +10,24 @@ const TIMEOUT_MS = 6000;
 
 export interface ScoreEntry {
   id: number;
-  rank: number;
+  /** Position among the completed runs, or null for a run that stopped early. */
+  rank: number | null;
   name: string;
   deaths: number;
   durationMs: number;
-  createdAt: number;
+  levels: number;
+  complete: boolean;
+  updatedAt: number;
+}
+
+export interface Board {
+  scores: ScoreEntry[];
+  unranked: ScoreEntry[];
+  levelCount: number;
+  /** Number of completed runs. */
+  total: number;
+  /** Number of runs on the board, complete or not. */
+  totalRuns: number;
 }
 
 export interface RunTicket {
@@ -25,8 +38,12 @@ export interface RunTicket {
 
 export interface SubmitResult {
   id: number;
-  rank: number;
+  rank: number | null;
+  levels: number;
+  levelCount: number;
+  complete: boolean;
   total: number;
+  totalRuns: number;
 }
 
 export class ScoreboardError extends Error {}
@@ -56,7 +73,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export function fetchScores(limit = 10): Promise<{ scores: ScoreEntry[]; total: number }> {
+export function fetchScores(limit = 10): Promise<Board> {
   return request(`/scores?limit=${limit}`);
 }
 

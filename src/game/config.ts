@@ -19,6 +19,13 @@ export const COIN_RADIUS = 8;
 /** Seconds the death effect runs before the level restarts. */
 export const DEATH_FREEZE = 0.55;
 
+/** How hard a conveyor tile drags, in px/s. Well below PLAYER_SPEED on purpose. */
+export const CONVEYOR_SPEED = 110;
+/** Seconds for a full gate cycle: group A open, then group B. */
+export const GATE_CYCLE = 3.6;
+/** Seconds a gate blinks before it changes state. */
+export const GATE_WARN = 0.7;
+
 export const COLORS = {
   // Playfield
   outside: '#9fa8bd',
@@ -33,6 +40,17 @@ export const COLORS = {
   coinHi: '#fff3a8',
   player: '#ff2d2d',
   playerHi: '#ff8a8a',
+
+  // Mechanics
+  conveyorA: '#cfd8ee',
+  conveyorB: '#bfcae4',
+  conveyorArrow: '#5d6f95',
+  gateClosed: '#9b3b3b',
+  gateClosedHi: '#c96a6a',
+  gateOpenA: '#f0dede',
+  gateOpenB: '#e4cdcd',
+  gateMark: '#9b3b3b',
+  teleport: ['#7d3cc4', '#0f8f86', '#c06a12'] as readonly string[],
 
   // Interface, styled after classic desktop windows
   face: '#d4d0c8',

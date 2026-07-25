@@ -242,6 +242,19 @@ canvas:focus-visible {
   background: #a9e9a2;
 }
 
+.chip--belt {
+  background: repeating-linear-gradient(45deg, #cfd8ee 0 3px, #5d6f95 3px 5px);
+}
+
+.chip--gate {
+  background: repeating-linear-gradient(45deg, #9b3b3b 0 3px, #6d2626 3px 5px);
+}
+
+.chip--portal {
+  background: #7d3cc4;
+  border-radius: 50%;
+}
+
 /* ------------------------------------------------------------------ */
 
 .board {
@@ -321,9 +334,23 @@ canvas:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.board__table tr[data-unranked='true'] td {
+  color: var(--ink-muted);
+}
+
 .board__table tr[data-you='true'] td {
   background: #fff6c9;
+  color: var(--ink);
   font-weight: bold;
+}
+
+.board__table tr[data-separator='true'] td {
+  background: #ddd9d3;
+  font-size: 10px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: normal;
 }
 
 .board__note {
@@ -341,6 +368,71 @@ canvas:focus-visible {
   font-size: 10px;
   color: var(--ink-muted);
   text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Immersive mode: everything but the playfield gets out of the way.   */
+/* Used both inside the real Fullscreen API and as a fallback on iOS,  */
+/* where an arbitrary element cannot go fullscreen.                    */
+
+html.is-immersive,
+html.is-immersive body {
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+html.is-immersive body {
+  padding: 0;
+}
+
+html.is-immersive .page {
+  width: 100%;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border: 0;
+  box-shadow: none;
+}
+
+html.is-immersive .masthead,
+html.is-immersive .rotate-hint,
+html.is-immersive .toolbar,
+html.is-immersive .columns,
+html.is-immersive .board,
+html.is-immersive .footer {
+  display: none;
+}
+
+html.is-immersive .screen {
+  padding: 0;
+  border: 0;
+  background: #000;
+  /* Letterbox: keep the aspect ratio, use whatever fits. */
+  width: min(100vw, calc(100dvh * 800 / 540));
+}
+
+html.is-immersive canvas {
+  border: 0;
+}
+
+/** Small exit button, only visible while immersive. */
+.exit-immersive {
+  display: none;
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  z-index: 10;
+  opacity: 0.75;
+}
+
+html.is-immersive .exit-immersive {
+  display: block;
 }
 
 /* ------------------------------------------------------------------ */
