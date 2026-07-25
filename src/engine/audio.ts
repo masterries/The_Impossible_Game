@@ -1,13 +1,13 @@
 /**
- * Minimale Sound-Engine auf Basis der Web Audio API.
- * Alle Töne werden synthetisiert – das Spiel kommt ohne Audio-Assets aus.
+ * Minimal sound engine on top of the Web Audio API.
+ * Every tone is synthesised, so the game ships without audio assets.
  */
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   enabled = true;
 
-  /** Muss aus einer Nutzerinteraktion heraus laufen (Autoplay-Policy). */
+  /** Must run from a user interaction because of the autoplay policy. */
   unlock(): void {
     const ctx = this.ensure();
     if (ctx && ctx.state === 'suspended') void ctx.resume();
@@ -15,7 +15,9 @@ export class Sfx {
 
   private ensure(): AudioContext | null {
     if (this.ctx) return this.ctx;
-    const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
     this.ctx = new Ctor();
     this.master = this.ctx.createGain();

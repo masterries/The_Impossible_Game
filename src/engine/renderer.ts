@@ -1,9 +1,9 @@
 /**
- * Canvas-Wrapper mit fester logischer Auflösung.
+ * Canvas wrapper with a fixed logical resolution.
  *
- * Gezeichnet wird immer in Logik-Koordinaten (`width` × `height`); die
- * tatsächliche Pixelgröße folgt der CSS-Breite und dem Device-Pixel-Ratio,
- * damit auf HiDPI-Displays nichts unscharf wird.
+ * Drawing always happens in logical coordinates (`width` × `height`); the real
+ * pixel size follows the CSS width and the device pixel ratio so nothing turns
+ * blurry on HiDPI displays.
  */
 export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
@@ -15,20 +15,20 @@ export class Renderer {
     readonly height: number,
   ) {
     const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) throw new Error('Canvas-2D-Kontext ist nicht verfügbar.');
+    if (!ctx) throw new Error('Canvas 2D context is not available.');
     this.ctx = ctx;
 
     canvas.style.aspectRatio = `${width} / ${height}`;
 
-    // Das Canvas selbst beobachten: seine CSS-Größe hängt an width:100% und
-    // aspect-ratio, nicht an den width/height-Attributen. Ein Rückkopplungs-
-    // kreis ist damit ausgeschlossen.
+    // Observe the canvas itself: its CSS size comes from width:100% and
+    // aspect-ratio, not from the width/height attributes, so there is no
+    // feedback loop.
     new ResizeObserver(() => this.resize()).observe(canvas);
     window.addEventListener('resize', () => this.resize());
 
     this.resize();
-    // Beim ersten Aufruf steht das Layout eventuell noch nicht, deshalb nach
-    // dem ersten Frame noch einmal nachmessen.
+    // Layout may not be settled during construction, so measure again after
+    // the first frame.
     requestAnimationFrame(() => this.resize());
   }
 
@@ -47,7 +47,16 @@ export class Renderer {
     this.scale = pixelWidth / this.width;
   }
 
-  /** Transform zurücksetzen und Hintergrund füllen. */
+  /**
+   * How many CSS pixels one logical pixel currently occupies. Below roughly
+   * 0.6 the canvas is on a phone and text has to be drawn larger to stay
+   * readable.
+   */
+  get displayScale(): number {
+    return (this.canvas.clientWidth || this.width) / this.width;
+  }
+
+  /** Reset the transform and clear the background. */
   begin(background: string): void {
     const { ctx } = this;
     ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);

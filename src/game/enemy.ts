@@ -11,9 +11,9 @@ interface Segment {
 }
 
 /**
- * Ein Gegner. Seine Position ist eine reine Funktion der Levelzeit
- * (`positionAt`) – es gibt keinen veränderlichen Zustand. Dadurch sieht ein
- * Level nach jedem Tod exakt gleich aus, so wie im Original.
+ * An enemy. Its position is a pure function of the level time (`positionAt`)
+ * and it holds no mutable state, so a level looks exactly the same after every
+ * death, just like in the original.
  */
 export class Enemy {
   readonly pos: Vec2 = { x: 0, y: 0 };
@@ -22,11 +22,11 @@ export class Enemy {
   private readonly speed: number;
   private readonly phase: number;
 
-  // Streckenzug
+  // Polyline
   private readonly segments: Segment[] = [];
   private readonly totalLength: number = 0;
 
-  // Kreisbahn
+  // Circle
   private readonly cx: number = 0;
   private readonly cy: number = 0;
   private readonly radius: number = 0;
@@ -49,7 +49,7 @@ export class Enemy {
         spec.kind === 'linear' ? [spec.from, spec.to] : spec.points;
       const loop = spec.kind === 'linear' ? 'pingpong' : (spec.loop ?? 'pingpong');
 
-      // Pingpong wird als geschlossener Ring modelliert: A→B→C→B→(A)
+      // Ping-pong is modelled as a closed ring: A -> B -> C -> B -> (A)
       const closed =
         loop === 'pingpong' ? [...points, ...points.slice(1, -1).reverse()] : [...points];
 
@@ -72,7 +72,7 @@ export class Enemy {
     this.positionAt(0);
   }
 
-  /** Setzt `pos` auf die Position zur Levelzeit `time` (Sekunden) und gibt sie zurück. */
+  /** Moves `pos` to the position at level time `time` (seconds) and returns it. */
   positionAt(time: number): Vec2 {
     if (this.totalLength <= 0) return this.pos;
 
@@ -97,7 +97,7 @@ export class Enemy {
       return this.pos;
     }
 
-    // Rundungsreste: auf den Endpunkt des letzten Segments setzen.
+    // Rounding leftovers: snap to the end of the last segment.
     const last = this.segments[this.segments.length - 1];
     if (last) {
       this.pos.x = last.ax + last.dx;

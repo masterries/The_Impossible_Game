@@ -11,7 +11,7 @@ interface Particle {
   color: string;
 }
 
-/** Sehr kleiner Partikel-Pool für Tod- und Münz-Effekte. */
+/** Very small particle pool for death and coin effects. */
 export class Particles {
   private readonly items: Particle[] = [];
 

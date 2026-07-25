@@ -1,11 +1,11 @@
 import type { EnemySpec, LevelDef, TilePoint } from './types';
 
 /* ------------------------------------------------------------------ *
- * Kleine Helfer, damit die Gegner-Listen lesbar bleiben.
- * Koordinaten sind Kachelmitten (x.5 / y.5).
+ * Small helpers that keep the enemy lists readable.
+ * Coordinates are tile centres (x.5 / y.5).
  * ------------------------------------------------------------------ */
 
-/** Waagerechter Pendler auf Zeile `y` zwischen Spalte `x0` und `x1`. */
+/** Horizontal mover on row `y`, between column `x0` and `x1`. */
 const hori = (y: number, x0: number, x1: number, speed: number, phase = 0): EnemySpec => ({
   kind: 'linear',
   from: [x0 + 0.5, y + 0.5],
@@ -14,7 +14,7 @@ const hori = (y: number, x0: number, x1: number, speed: number, phase = 0): Enem
   phase,
 });
 
-/** Senkrechter Pendler in Spalte `x` zwischen Zeile `y0` und `y1`. */
+/** Vertical mover in column `x`, between row `y0` and `y1`. */
 const vert = (x: number, y0: number, y1: number, speed: number, phase = 0): EnemySpec => ({
   kind: 'linear',
   from: [x + 0.5, y0 + 0.5],
@@ -23,7 +23,7 @@ const vert = (x: number, y0: number, y1: number, speed: number, phase = 0): Enem
   phase,
 });
 
-/** Gleichmäßig verteilter Ring aus `count` Gegnern. */
+/** Evenly spaced ring of `count` enemies. */
 const ring = (
   center: TilePoint,
   radius: number,
@@ -42,13 +42,13 @@ const ring = (
   }));
 
 /* ------------------------------------------------------------------ *
- * Level
+ * Levels
  * ------------------------------------------------------------------ */
 
 export const LEVELS: readonly LevelDef[] = [
   {
-    name: 'Aufwärmen',
-    hint: 'Zwischen den blauen Kugeln ist immer eine Lücke.',
+    name: 'Warm-up',
+    hint: 'There is always a gap between the blue balls.',
     grid: [
       '####################',
       '####################',
@@ -73,8 +73,8 @@ export const LEVELS: readonly LevelDef[] = [
   },
 
   {
-    name: 'Karussell',
-    hint: 'Kreisbahnen dreht man am besten mit – nicht dagegen.',
+    name: 'Carousel',
+    hint: 'Turn with the circles, not against them.',
     grid: [
       '####################',
       '####################',
@@ -98,8 +98,8 @@ export const LEVELS: readonly LevelDef[] = [
   },
 
   {
-    name: 'Der Umweg',
-    hint: 'Der Engpass in der Mitte ist der einzige Weg nach unten.',
+    name: 'The Detour',
+    hint: 'The narrow middle section is the only way down.',
     grid: [
       '####################',
       '##SS.............###',
@@ -129,8 +129,8 @@ export const LEVELS: readonly LevelDef[] = [
   },
 
   {
-    name: 'Die Welle',
-    hint: 'Alle Reihen laufen versetzt – such dir die Diagonale.',
+    name: 'The Wave',
+    hint: 'Every row is offset. Find the diagonal.',
     grid: [
       '####################',
       '##SS............EE##',
@@ -149,8 +149,8 @@ export const LEVELS: readonly LevelDef[] = [
   },
 
   {
-    name: 'Sackgasse',
-    hint: 'Die Wände schützen dich – solange du nicht stehen bleibst.',
+    name: 'Dead End',
+    hint: 'The walls protect you, as long as you keep moving.',
     grid: [
       '####################',
       '##SS............EE##',
@@ -178,8 +178,8 @@ export const LEVELS: readonly LevelDef[] = [
   },
 
   {
-    name: 'Das Auge',
-    hint: 'Letztes Level. Viel Glück.',
+    name: 'The Eye',
+    hint: 'Last level. Good luck.',
     grid: [
       '####################',
       '##SS............EE##',

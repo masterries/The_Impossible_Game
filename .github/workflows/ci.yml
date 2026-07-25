@@ -1,4 +1,4 @@
-name: Bauen und veröffentlichen
+name: Build and publish
 
 on:
   push:
@@ -9,64 +9,86 @@ on:
 
 jobs:
   bundle:
-    name: Typprüfung und Bundle
+    name: Type check and bundle
     runs-on: ubuntu-latest
     steps:
-      - name: Quellcode auschecken
+      - name: Check out the source
         uses: actions/checkout@v4
 
-      - name: Node einrichten
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
 
-      - name: Abhängigkeiten installieren
+      - name: Install dependencies
         run: npm ci
 
-      - name: Typprüfung und Produktions-Build
+      - name: Type check and production build
         run: npm run build
 
-  abbild:
-    name: Container-Image bauen und hochladen
+  api-smoke-test:
+    name: Scoreboard API smoke test
     runs-on: ubuntu-latest
-    needs: bundle
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run the API test
+        run: node server/test.js
+
+  images:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    needs: [bundle, api-smoke-test]
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - name: impossible-game
+            context: .
+          - name: impossible-game-api
+            context: ./server
     steps:
-      - name: Quellcode auschecken
+      - name: Check out the source
         uses: actions/checkout@v4
 
-      - name: Buildx einrichten
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: An der GitHub Container Registry anmelden
+      - name: Log in to the GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Namen und Marken bestimmen
+      - name: Work out names and tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Fester Name statt github.repository: der Image-Pfad hängt damit
-          # nicht am Repository-Namen und bleibt beim Umbenennen gleich.
-          images: ghcr.io/${{ github.repository_owner }}/impossible-game
+          # Fixed name instead of github.repository, so the image path does not
+          # depend on the repository name and survives a rename.
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Image bauen und hochladen
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

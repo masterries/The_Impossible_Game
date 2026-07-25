@@ -1,9 +1,8 @@
 /**
- * Spielschleife mit festem Zeitschritt.
+ * Fixed timestep game loop.
  *
- * Physik und Kollision laufen deterministisch mit `step` Sekunden pro Update,
- * unabhängig von der Bildwiederholrate des Monitors. Gerendert wird einmal
- * pro Frame.
+ * Physics and collision run deterministically with `step` seconds per update,
+ * independent of the monitor refresh rate. Rendering happens once per frame.
  */
 export class GameLoop {
   private rafId = 0;
@@ -15,7 +14,7 @@ export class GameLoop {
     private readonly update: (dt: number) => void,
     private readonly render: () => void,
     private readonly step = 1 / 120,
-    /** Obergrenze pro Frame, damit ein Tab-Wechsel keine Update-Lawine auslöst. */
+    /** Per-frame ceiling so switching tabs does not trigger an update avalanche. */
     private readonly maxFrameTime = 0.25,
   ) {}
 

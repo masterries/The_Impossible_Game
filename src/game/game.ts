@@ -1,7 +1,8 @@
 import { Sfx } from '../engine/audio';
 import { Input } from '../engine/input';
 import { GameLoop } from '../engine/loop';
-import { pointBoxDistanceSq, TAU } from '../engine/math';
+import { pointBoxDistanceSq, TAU, type Vec2 } from '../engine/math';
+import { PointerInput, STICK_RANGE } from '../engine/pointer';
 import { Renderer } from '../engine/renderer';
 import {
   COIN_RADIUS,
@@ -11,6 +12,7 @@ import {
   ENEMY_RADIUS,
   FONT_BODY,
   FONT_BODY_BOLD,
+  FONT_GLYPH,
   FONT_HEAD,
   FONT_LABEL,
   FONT_SUB,
@@ -36,18 +38,68 @@ interface DialogLine {
   font: string;
   color?: string;
   space?: number;
+  /** Dropped on phones, where every line costs a lot of room. */
+  compactHide?: boolean;
+}
+
+interface DialogLayout {
+  boxW: number;
+  boxH: number;
+  pad: number;
+  titleH: number;
+  buttonH: number;
+  buttonW: number;
+  titleFont: string;
+  actionFont: string;
+  lineFonts: string[];
+  lineSizes: number[];
+  lineSpaces: number[];
+}
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface RunResult {
+  deaths: number;
+  durationMs: number;
+  levels: number;
 }
 
 const BEST_KEY = 'impossible-game.best-deaths';
 
+/** Touch targets in the status bar, so the game is fully playable without a keyboard. */
+const PAUSE_BUTTON: Box = { x: 700, y: 12, w: 40, h: 34 };
+const RESTART_BUTTON: Box = { x: 746, y: 12, w: 40, h: 34 };
+
+/** Same buttons on a phone, where every logical pixel is worth far less. */
+const PAUSE_BUTTON_SMALL: Box = { x: 648, y: 8, w: 66, h: 44 };
+const RESTART_BUTTON_SMALL: Box = { x: 722, y: 8, w: 66, h: 44 };
+
+/**
+ * Below this display scale the canvas is small enough that the regular text
+ * sizes stop being readable, so the status bar and the dialogs switch to a
+ * larger, shorter layout.
+ */
+const COMPACT_BELOW = 0.62;
+
 export class Game {
   private readonly renderer: Renderer;
   private readonly input: Input;
+  private readonly pointer: PointerInput;
   private readonly loop: GameLoop;
   private readonly particles = new Particles();
   private readonly player = new Player();
 
   readonly sfx = new Sfx();
+
+  /** Fired when a fresh run starts, used to request a scoreboard ticket. */
+  onRunStart: (() => void) | null = null;
+  /** Fired once all levels are cleared. */
+  onRunFinish: ((result: RunResult) => void) | null = null;
 
   private levelIndex = 0;
   private level: Level;
@@ -62,6 +114,7 @@ export class Game {
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas, VIEW_W, VIEW_H);
     this.input = new Input(window);
+    this.pointer = new PointerInput(canvas, VIEW_W, VIEW_H);
     this.level = new Level(LEVELS[0]!);
     this.player.spawn(this.level);
     this.best = readBest();
@@ -71,8 +124,9 @@ export class Game {
       () => this.draw(),
     );
 
-    window.addEventListener('blur', () => {
-      if (this.state === 'playing') this.setState('paused');
+    window.addEventListener('blur', () => this.pauseIfPlaying());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.pauseIfPlaying();
     });
   }
 
@@ -80,8 +134,14 @@ export class Game {
     this.loop.start();
   }
 
+  private pauseIfPlaying(): void {
+    this.input.reset();
+    this.pointer.reset();
+    if (this.state === 'playing') this.setState('paused');
+  }
+
   /* ---------------------------------------------------------------- *
-   * Ablaufsteuerung
+   * Flow control
    * ---------------------------------------------------------------- */
 
   private setState(next: State): void {
@@ -94,6 +154,7 @@ export class Game {
     this.runTime = 0;
     this.levelIndex = 0;
     this.loadLevel(0);
+    this.onRunStart?.();
   }
 
   private loadLevel(index: number): void {
@@ -130,6 +191,11 @@ export class Game {
       }
       this.sfx.victory();
       this.setState('finished');
+      this.onRunFinish?.({
+        deaths: this.deaths,
+        durationMs: Math.round(this.runTime * 1000),
+        levels: LEVELS.length,
+      });
     } else {
       this.sfx.levelComplete();
       this.setState('levelComplete');
@@ -146,9 +212,11 @@ export class Game {
     this.flash = Math.max(0, this.flash - dt * 4);
     this.particles.update(dt);
 
+    const confirm = this.input.anyConfirm() || this.handleTap();
+
     switch (this.state) {
       case 'title':
-        if (this.input.anyConfirm()) {
+        if (confirm) {
           this.sfx.unlock();
           this.sfx.select();
           this.startRun();
@@ -156,7 +224,7 @@ export class Game {
         break;
 
       case 'ready':
-        if (this.input.anyConfirm()) {
+        if (confirm) {
           this.sfx.select();
           this.setState('playing');
         }
@@ -171,23 +239,21 @@ export class Game {
         break;
 
       case 'levelComplete':
-        if (this.input.anyConfirm()) {
+        if (confirm) {
           this.sfx.select();
           this.loadLevel(this.levelIndex + 1);
         }
         break;
 
       case 'finished':
-        if (this.input.anyConfirm()) {
+        if (confirm) {
           this.sfx.select();
           this.startRun();
         }
         break;
 
       case 'paused':
-        if (this.input.wasPressed('KeyP', 'Escape') || this.input.anyConfirm()) {
-          this.setState('playing');
-        }
+        if (confirm || this.input.wasPressed('KeyP', 'Escape')) this.setState('playing');
         break;
     }
 
@@ -199,6 +265,53 @@ export class Game {
     this.input.endFrame();
   }
 
+  /**
+   * Consumes a pending tap. Returns true when the tap should count as a
+   * "continue", false when it hit a status bar button or the playfield.
+   */
+  private handleTap(): boolean {
+    const tap = this.pointer.takeTap();
+    if (!tap) return false;
+
+    if (inside(tap, this.pauseBox)) {
+      if (this.state === 'playing') this.setState('paused');
+      else if (this.state === 'paused') this.setState('playing');
+      return false;
+    }
+
+    if (inside(tap, this.restartBox)) {
+      if (this.state === 'playing' || this.state === 'dying' || this.state === 'paused') {
+        this.restartLevel();
+      }
+      return false;
+    }
+
+    // Taps on the playfield only mean "continue" while a dialog is open.
+    return this.state !== 'playing' && this.state !== 'dying';
+  }
+
+  /** True while the canvas is displayed small enough to need the phone layout. */
+  private get compact(): boolean {
+    return this.renderer.displayScale < COMPACT_BELOW;
+  }
+
+  private get pauseBox(): Box {
+    return this.compact ? PAUSE_BUTTON_SMALL : PAUSE_BUTTON;
+  }
+
+  private get restartBox(): Box {
+    return this.compact ? RESTART_BUTTON_SMALL : RESTART_BUTTON;
+  }
+
+  /** Keyboard wins; touch takes over when no movement key is held. */
+  private moveAxis(): Vec2 {
+    const keys = this.input.axis;
+    if (keys.x !== 0 || keys.y !== 0) return keys;
+    // A touch that started on the status bar must not steer.
+    if (this.pointer.stickOrigin.y < HUD_H) return keys;
+    return this.pointer.axis;
+  }
+
   private updatePlaying(dt: number): void {
     if (this.input.wasPressed('KeyP', 'Escape')) {
       this.setState('paused');
@@ -207,11 +320,11 @@ export class Game {
 
     this.runTime += dt;
     this.level.advance(dt);
-    this.player.update(dt, this.input.axis, this.level);
+    this.player.update(dt, this.moveAxis(), this.level);
 
     const half = this.player.half;
 
-    // Münzen einsammeln
+    // Collect coins
     for (const coin of this.level.coins) {
       if (coin.collected) continue;
       const d2 = pointBoxDistanceSq(coin.x, coin.y, this.player.x, this.player.y, half, half);
@@ -222,7 +335,7 @@ export class Game {
       }
     }
 
-    // Gegner-Treffer
+    // Enemy hit
     for (const enemy of this.level.enemies) {
       const d2 = pointBoxDistanceSq(
         enemy.pos.x,
@@ -238,7 +351,7 @@ export class Game {
       }
     }
 
-    // Ziel erreicht?
+    // Reached the goal?
     const { end } = this.level;
     const inEnd =
       this.player.x >= end.x &&
@@ -259,6 +372,7 @@ export class Game {
 
     this.drawHud(ctx);
     this.drawField(ctx);
+    this.drawStick(ctx);
     this.drawOverlay(ctx);
   }
 
@@ -271,7 +385,7 @@ export class Game {
     ctx.save();
     ctx.translate(ox, HUD_H + oy);
 
-    // Kacheln
+    // Tiles
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const tile = level.tileAt(c, r);
@@ -289,7 +403,7 @@ export class Game {
       }
     }
 
-    // Schwarze Umrandung an allen Außenkanten des begehbaren Bereichs
+    // Black outline along every edge of the walkable area
     ctx.strokeStyle = COLORS.wallLine;
     ctx.lineWidth = 3;
     ctx.lineCap = 'square';
@@ -319,7 +433,7 @@ export class Game {
     }
     ctx.stroke();
 
-    // Zielzone bleibt verschlossen, solange Münzen fehlen
+    // The goal stays sealed while coins are missing
     if (!level.allCoinsCollected) {
       const pulse = 0.18 + 0.12 * Math.sin(level.time * 5);
       ctx.globalAlpha = pulse;
@@ -388,8 +502,38 @@ export class Game {
     ctx.strokeRect(x + 1.5, y + 1.5, PLAYER_SIZE - 3, PLAYER_SIZE - 3);
   }
 
+  /** Virtual thumbstick, drawn wherever the finger went down. */
+  private drawStick(ctx: CanvasRenderingContext2D): void {
+    if (this.state !== 'playing') return;
+    if (!this.pointer.isDown) return;
+    const origin = this.pointer.stickOrigin;
+    if (origin.y < HUD_H) return;
+
+    const knob = this.pointer.stickKnob;
+    const dx = knob.x - origin.x;
+    const dy = knob.y - origin.y;
+    const distance = Math.hypot(dx, dy);
+    const factor = distance > STICK_RANGE ? STICK_RANGE / distance : 1;
+
+    ctx.beginPath();
+    ctx.arc(origin.x, origin.y, STICK_RANGE, 0, TAU);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(origin.x + dx * factor, origin.y + dy * factor, 20, 0, TAU);
+    ctx.fillStyle = COLORS.face;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = COLORS.ink;
+    ctx.stroke();
+  }
+
   /* ---------------------------------------------------------------- *
-   * Anzeigeleiste
+   * Status bar
    * ---------------------------------------------------------------- */
 
   private drawHud(ctx: CanvasRenderingContext2D): void {
@@ -405,34 +549,80 @@ export class Game {
       ctx.fillRect(0, 0, VIEW_W, HUD_H - 3);
     }
 
-    const stats: Array<[string, string]> = [
-      ['LEVEL', `${this.levelIndex + 1} / ${LEVELS.length}`],
-      ['MÜNZEN', `${this.level.collectedCoins} / ${this.level.totalCoins}`],
-      ['TODE', `${this.deaths}`],
-      ['ZEIT', formatTime(this.runTime)],
-    ];
+    if (this.compact) {
+      // Phones: three wide readouts, no room for the level name.
+      const stats: Array<[string, string]> = [
+        ['LEVEL', `${this.levelIndex + 1}/${LEVELS.length}`],
+        ['COINS', `${this.level.collectedCoins}/${this.level.totalCoins}`],
+        ['DEATHS', `${this.deaths}`],
+      ];
+      let x = 14;
+      for (const [label, value] of stats) {
+        this.text(ctx, label, x, 17, scaleFont(FONT_LABEL, 1.5), COLORS.inkMuted);
+        this.readout(ctx, x, 21, 196, 32, value, scaleFont(FONT_VALUE, 1.55));
+        x += 208;
+      }
+    } else {
+      const stats: Array<[string, string]> = [
+        ['LEVEL', `${this.levelIndex + 1} / ${LEVELS.length}`],
+        ['COINS', `${this.level.collectedCoins} / ${this.level.totalCoins}`],
+        ['DEATHS', `${this.deaths}`],
+        ['TIME', formatTime(this.runTime)],
+      ];
+      let x = 14;
+      for (const [label, value] of stats) {
+        this.text(ctx, label, x, 19, FONT_LABEL, COLORS.inkMuted);
+        this.readout(ctx, x, 25, 84, 22, value, FONT_VALUE);
+        x += 96;
+      }
 
-    let x = 14;
-    for (const [label, value] of stats) {
-      this.text(ctx, label, x, 19, FONT_LABEL, COLORS.inkMuted);
-      this.readout(ctx, x, 25, 84, 22, value);
-      x += 96;
+      const right = PAUSE_BUTTON.x - 10;
+      this.text(ctx, this.level.name, right, 24, FONT_BODY_BOLD, COLORS.ink, 'right');
+      const record = this.best === null ? 'Best run: none yet' : `Best run: ${this.best} deaths`;
+      this.text(ctx, record, right, 43, FONT_BODY, COLORS.inkMuted, 'right');
     }
 
-    this.text(
-      ctx,
-      `Level ${this.levelIndex + 1}: ${this.level.name}`,
-      VIEW_W - 14,
-      24,
-      FONT_BODY_BOLD,
-      COLORS.ink,
-      'right',
-    );
-    const record = this.best === null ? 'Bester Lauf: noch keiner' : `Bester Lauf: ${this.best} Tode`;
-    this.text(ctx, record, VIEW_W - 14, 43, FONT_BODY, COLORS.inkMuted, 'right');
+    this.drawPauseButton(ctx);
+    this.drawRestartButton(ctx);
   }
 
-  /** Vertieftes Anzeigefeld, wie man es von alten Bedienoberflächen kennt. */
+  private drawPauseButton(ctx: CanvasRenderingContext2D): void {
+    const b = this.pauseBox;
+    this.bevelBox(ctx, b.x, b.y, b.w, b.h, this.state !== 'paused');
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const s = this.compact ? 1.5 : 1;
+    ctx.fillStyle = COLORS.ink;
+    if (this.state === 'paused') {
+      // Play triangle
+      ctx.beginPath();
+      ctx.moveTo(cx - 5 * s, cy - 7 * s);
+      ctx.lineTo(cx + 7 * s, cy);
+      ctx.lineTo(cx - 5 * s, cy + 7 * s);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillRect(cx - 6 * s, cy - 7 * s, 4 * s, 14 * s);
+      ctx.fillRect(cx + 2 * s, cy - 7 * s, 4 * s, 14 * s);
+    }
+  }
+
+  private drawRestartButton(ctx: CanvasRenderingContext2D): void {
+    const b = this.restartBox;
+    const font = this.compact ? scaleFont(FONT_GLYPH, 1.5) : FONT_GLYPH;
+    this.bevelBox(ctx, b.x, b.y, b.w, b.h, true);
+    this.text(
+      ctx,
+      'R',
+      b.x + b.w / 2,
+      b.y + b.h / 2 + (this.compact ? 9 : 6),
+      font,
+      COLORS.ink,
+      'center',
+    );
+  }
+
+  /** Sunken readout field, the way old interfaces showed numbers. */
   private readout(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -440,6 +630,7 @@ export class Game {
     w: number,
     h: number,
     value: string,
+    font: string,
   ): void {
     ctx.fillStyle = COLORS.ink;
     ctx.fillRect(x, y, w, h);
@@ -448,11 +639,11 @@ export class Game {
     ctx.fillStyle = COLORS.faceShadow;
     ctx.fillRect(x + 1, y + 1, w - 2, 1);
     ctx.fillRect(x + 1, y + 1, 1, h - 2);
-    this.text(ctx, value, x + w / 2, y + h - 6, FONT_VALUE, COLORS.ink, 'center');
+    this.text(ctx, value, x + w / 2, y + h / 2 + fontSize(font) * 0.36, font, COLORS.ink, 'center');
   }
 
   /* ---------------------------------------------------------------- *
-   * Dialoge
+   * Dialogs
    * ---------------------------------------------------------------- */
 
   private drawOverlay(ctx: CanvasRenderingContext2D): void {
@@ -463,68 +654,82 @@ export class Game {
           'The Impossible Game',
           [
             { text: 'THE IMPOSSIBLE GAME', font: FONT_HEAD },
-            { text: 'ein Remake von World’s Hardest Game', font: FONT_BODY, color: COLORS.inkMuted, space: 6 },
-            { text: 'Sammle alle gelben Münzen, dann erreiche das grüne Feld.', font: FONT_BODY, space: 22 },
-            { text: 'Eine Berührung mit Blau, und das Level beginnt von vorn.', font: FONT_BODY, space: 6 },
             {
-              text: this.best === null ? '6 Level, keine Speicherpunkte.' : `Bester Lauf bisher: ${this.best} Tode`,
+              text: 'a remake of World’s Hardest Game',
+              font: FONT_BODY,
+              color: COLORS.inkMuted,
+              space: 6,
+              compactHide: true,
+            },
+            { text: 'Collect every yellow coin, then reach the green field.', font: FONT_BODY, space: 22 },
+            { text: 'One touch of blue and the level starts over.', font: FONT_BODY, space: 6 },
+            {
+              text:
+                this.best === null
+                  ? 'Six levels, no checkpoints.'
+                  : `Your best run so far: ${this.best} deaths`,
               font: FONT_BODY_BOLD,
               space: 16,
             },
           ],
-          'Leertaste zum Starten',
+          'Press space or tap to start',
         );
         break;
 
       case 'ready':
         this.dialog(
           ctx,
-          `Level ${this.levelIndex + 1} von ${LEVELS.length}`,
+          `Level ${this.levelIndex + 1} of ${LEVELS.length}`,
           [
             { text: this.level.name, font: FONT_HEAD },
             { text: this.level.hint, font: FONT_BODY, color: COLORS.inkMuted, space: 12 },
           ],
-          'Leertaste',
+          'Space or tap',
         );
         break;
 
       case 'levelComplete':
         this.dialog(
           ctx,
-          'Geschafft',
+          'Level cleared',
           [
-            { text: 'LEVEL GESCHAFFT', font: FONT_HEAD },
-            { text: `Tode bisher: ${this.deaths}`, font: FONT_BODY, space: 12 },
+            { text: 'LEVEL CLEARED', font: FONT_HEAD },
+            { text: `Deaths so far: ${this.deaths}`, font: FONT_BODY, space: 12 },
           ],
-          `Weiter zu Level ${this.levelIndex + 2}`,
+          `Continue to level ${this.levelIndex + 2}`,
         );
         break;
 
       case 'finished':
         this.dialog(
           ctx,
-          'Durchgespielt',
+          'Run complete',
           [
-            { text: 'ALLE LEVEL GESCHAFFT', font: FONT_HEAD },
-            { text: `${this.deaths} Tode in ${formatTime(this.runTime)}`, font: FONT_SUB, space: 14 },
+            { text: 'ALL LEVELS CLEARED', font: FONT_HEAD },
+            { text: `${this.deaths} deaths in ${formatTime(this.runTime)}`, font: FONT_SUB, space: 14 },
             {
-              text: this.best === this.deaths ? 'Das ist ein neuer Bestwert.' : `Bester Lauf: ${this.best} Tode`,
+              text:
+                this.best === this.deaths
+                  ? 'That is a new personal best.'
+                  : `Personal best: ${this.best} deaths`,
               font: FONT_BODY,
               color: COLORS.inkMuted,
               space: 10,
+              compactHide: true,
+            },
+            {
+              text: 'Your score is being sent to the scoreboard below.',
+              font: FONT_BODY,
+              color: COLORS.inkMuted,
+              space: 6,
             },
           ],
-          'Noch einmal von vorn',
+          'Play again',
         );
         break;
 
       case 'paused':
-        this.dialog(
-          ctx,
-          'Pause',
-          [{ text: 'PAUSE', font: FONT_HEAD }],
-          'Leertaste oder P zum Weitermachen',
-        );
+        this.dialog(ctx, 'Paused', [{ text: 'PAUSED', font: FONT_HEAD }], 'Space, P or tap');
         break;
 
       case 'playing':
@@ -533,7 +738,12 @@ export class Game {
     }
   }
 
-  /** Klassisches Dialogfenster mit Titelleiste, Text und Schaltfläche. */
+  /**
+   * Classic dialog window with a title bar, text and a button.
+   *
+   * On a phone the whole dialog is scaled up. The largest factor that still
+   * fits inside the playfield wins, so text can never spill out of the box.
+   */
   private dialog(
     ctx: CanvasRenderingContext2D,
     title: string,
@@ -543,33 +753,17 @@ export class Game {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
     ctx.fillRect(0, HUD_H, VIEW_W, VIEW_H - HUD_H);
 
-    const PAD = 22;
-    const TITLE_H = 26;
-    const BUTTON_H = 30;
+    const visible = this.compact ? lines.filter((line) => !line.compactHide) : lines;
+    const maxW = VIEW_W - 30;
+    const maxH = VIEW_H - HUD_H - 20;
 
-    let contentW = 0;
-    let contentH = 0;
-    const metrics = lines.map((line) => {
-      ctx.font = line.font;
-      contentW = Math.max(contentW, ctx.measureText(line.text).width);
-      return { size: fontSize(line.font), space: line.space ?? 10 };
-    });
-    metrics.forEach((m, i) => {
-      contentH += m.size + (i === 0 ? 0 : m.space);
-    });
-
-    ctx.font = FONT_TITLEBAR;
-    contentW = Math.max(contentW, ctx.measureText(title).width + 40);
-
-    let buttonW = 0;
-    if (action) {
-      ctx.font = FONT_BODY_BOLD;
-      buttonW = Math.ceil(ctx.measureText(action).width) + 48;
-      contentW = Math.max(contentW, buttonW);
+    let layout = this.measureDialog(ctx, title, visible, action, 1);
+    for (const factor of this.compact ? [1.9, 1.7, 1.5, 1.3, 1.15, 1] : [1]) {
+      layout = this.measureDialog(ctx, title, visible, action, factor);
+      if (layout.boxW <= maxW && layout.boxH <= maxH) break;
     }
 
-    const boxW = Math.min(VIEW_W - 60, Math.max(400, Math.ceil(contentW) + PAD * 2));
-    const boxH = TITLE_H + PAD + contentH + (action ? 20 + BUTTON_H : 0) + PAD;
+    const { boxW, boxH, pad, titleH, buttonH, buttonW, titleFont, actionFont } = layout;
     const boxX = Math.round((VIEW_W - boxW) / 2);
     const boxY = Math.round(HUD_H + (VIEW_H - HUD_H - boxH) / 2);
 
@@ -579,35 +773,99 @@ export class Game {
     gradient.addColorStop(0, COLORS.titleBar);
     gradient.addColorStop(1, COLORS.titleBar2);
     ctx.fillStyle = gradient;
-    ctx.fillRect(boxX + 4, boxY + 4, boxW - 8, TITLE_H - 6);
-    this.text(ctx, title, boxX + 12, boxY + 18, FONT_TITLEBAR, COLORS.titleText);
+    ctx.fillRect(boxX + 4, boxY + 4, boxW - 8, titleH - 6);
+    this.text(
+      ctx,
+      title,
+      boxX + 12,
+      boxY + 4 + (titleH - 6) / 2 + fontSize(titleFont) * 0.36,
+      titleFont,
+      COLORS.titleText,
+    );
 
-    let y = boxY + TITLE_H + PAD;
-    lines.forEach((line, i) => {
-      const m = metrics[i]!;
-      if (i > 0) y += m.space;
-      y += m.size;
-      this.text(ctx, line.text, boxX + boxW / 2, y, line.font, line.color ?? COLORS.ink, 'center');
+    let y = boxY + titleH + pad;
+    visible.forEach((line, i) => {
+      const size = layout.lineSizes[i]!;
+      if (i > 0) y += layout.lineSpaces[i]!;
+      y += size;
+      this.text(
+        ctx,
+        line.text,
+        boxX + boxW / 2,
+        y,
+        layout.lineFonts[i]!,
+        line.color ?? COLORS.ink,
+        'center',
+      );
     });
 
     if (action) {
       const bx = Math.round(boxX + (boxW - buttonW) / 2);
-      const by = boxY + boxH - PAD - BUTTON_H;
+      const by = boxY + boxH - pad - buttonH;
       const raised = Math.floor(this.stateTime * 1.6) % 2 === 0;
-      this.bevelBox(ctx, bx, by, buttonW, BUTTON_H, raised);
+      this.bevelBox(ctx, bx, by, buttonW, buttonH, raised);
       this.text(
         ctx,
         action,
         bx + buttonW / 2 + (raised ? 0 : 1),
-        by + BUTTON_H / 2 + 4 + (raised ? 0 : 1),
-        FONT_BODY_BOLD,
+        by + buttonH / 2 + fontSize(actionFont) * 0.36 + (raised ? 0 : 1),
+        actionFont,
         COLORS.ink,
         'center',
       );
     }
   }
 
-  /** Rechteck mit schwarzem Rahmen und erhabener bzw. vertiefter Kante. */
+  /** Works out the dialog geometry for one font scale factor. */
+  private measureDialog(
+    ctx: CanvasRenderingContext2D,
+    title: string,
+    lines: DialogLine[],
+    action: string | undefined,
+    factor: number,
+  ): DialogLayout {
+    const pad = Math.round(22 * factor);
+    const titleH = Math.round(26 * factor);
+    const buttonH = Math.round(30 * factor);
+    const titleFont = scaleFont(FONT_TITLEBAR, factor);
+    const actionFont = scaleFont(FONT_BODY_BOLD, factor);
+
+    const lineFonts: string[] = [];
+    const lineSizes: number[] = [];
+    const lineSpaces: number[] = [];
+    let contentW = 0;
+    let contentH = 0;
+
+    lines.forEach((line, i) => {
+      const font = scaleFont(line.font, factor);
+      ctx.font = font;
+      contentW = Math.max(contentW, ctx.measureText(line.text).width);
+      const size = fontSize(font);
+      const space = Math.round((line.space ?? 10) * factor);
+      lineFonts.push(font);
+      lineSizes.push(size);
+      lineSpaces.push(space);
+      contentH += size + (i === 0 ? 0 : space);
+    });
+
+    ctx.font = titleFont;
+    contentW = Math.max(contentW, ctx.measureText(title).width + 40 * factor);
+
+    let buttonW = 0;
+    if (action) {
+      ctx.font = actionFont;
+      buttonW = Math.ceil(ctx.measureText(action).width) + Math.round(48 * factor);
+      contentW = Math.max(contentW, buttonW);
+    }
+
+    const boxW = Math.max(Math.round(400 * factor), Math.ceil(contentW) + pad * 2);
+    const boxH =
+      titleH + pad + contentH + (action ? Math.round(20 * factor) + buttonH : 0) + pad;
+
+    return { boxW, boxH, pad, titleH, buttonH, buttonW, titleFont, actionFont, lineFonts, lineSizes, lineSpaces };
+  }
+
+  /** Rectangle with a black frame and a raised or sunken bevel. */
   private bevelBox(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -648,8 +906,22 @@ export class Game {
   }
 }
 
+function inside(point: Vec2, box: Box): boolean {
+  return (
+    point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h
+  );
+}
+
 function fontSize(font: string): number {
   return Number.parseInt(font.match(/(\d+)px/)?.[1] ?? '16', 10);
+}
+
+/** Returns the same font shorthand with its size multiplied. */
+function scaleFont(font: string, factor: number): string {
+  if (factor === 1) return font;
+  return font.replace(/(\d+)px/, (_, size: string) =>
+    `${Math.max(1, Math.round(Number(size) * factor))}px`,
+  );
 }
 
 function formatTime(seconds: number): string {
@@ -673,6 +945,6 @@ function writeBest(value: number): void {
   try {
     localStorage.setItem(BEST_KEY, String(value));
   } catch {
-    /* localStorage kann blockiert sein, das ist kein Grund abzustürzen. */
+    /* localStorage can be blocked, that is no reason to crash. */
   }
 }

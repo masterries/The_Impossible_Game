@@ -23,7 +23,7 @@ const TILE_FROM_CHAR: Record<string, TileKind> = {
   E: Tile.End,
 };
 
-/** Ein geladenes Level: Kachelraster, Münzen, Zonen und Gegner. */
+/** A loaded level: tile grid, coins, zones and enemies. */
 export class Level {
   readonly name: string;
   readonly hint: string;
@@ -35,7 +35,7 @@ export class Level {
   readonly spawnX: number;
   readonly spawnY: number;
 
-  /** Levelzeit in Sekunden – wird bei jedem Tod auf 0 zurückgesetzt. */
+  /** Level time in seconds, reset to 0 on every death. */
   time = 0;
 
   constructor(def: LevelDef) {
@@ -44,7 +44,7 @@ export class Level {
     this.tiles = new Array<TileKind>(COLS * ROWS).fill(Tile.Void);
 
     if (def.grid.length !== ROWS) {
-      throw new Error(`Level "${def.name}": ${def.grid.length} Zeilen statt ${ROWS}.`);
+      throw new Error(`Level "${def.name}": ${def.grid.length} rows instead of ${ROWS}.`);
     }
 
     let startMinC = COLS;
@@ -59,13 +59,13 @@ export class Level {
     for (let r = 0; r < ROWS; r++) {
       const row = def.grid[r]!;
       if (row.length !== COLS) {
-        throw new Error(`Level "${def.name}", Zeile ${r}: ${row.length} Zeichen statt ${COLS}.`);
+        throw new Error(`Level "${def.name}", row ${r}: ${row.length} characters instead of ${COLS}.`);
       }
       for (let c = 0; c < COLS; c++) {
         const ch = row[c]!;
         const tile = TILE_FROM_CHAR[ch];
         if (tile === undefined) {
-          throw new Error(`Level "${def.name}": unbekanntes Zeichen "${ch}" bei ${c}/${r}.`);
+          throw new Error(`Level "${def.name}": unknown character "${ch}" at ${c}/${r}.`);
         }
         this.tiles[r * COLS + c] = tile;
 
@@ -85,8 +85,8 @@ export class Level {
       }
     }
 
-    if (startMaxC < 0) throw new Error(`Level "${def.name}": keine Startzone (S).`);
-    if (endMaxC < 0) throw new Error(`Level "${def.name}": keine Zielzone (E).`);
+    if (startMaxC < 0) throw new Error(`Level "${def.name}": no start zone (S).`);
+    if (endMaxC < 0) throw new Error(`Level "${def.name}": no end zone (E).`);
 
     this.start = {
       x: startMinC * TILE,
@@ -130,14 +130,14 @@ export class Level {
     return this.collectedCoins === this.coins.length;
   }
 
-  /** Setzt Zeit und Münzen zurück (nach einem Tod oder Neustart). */
+  /** Resets time and coins, after a death or a manual restart. */
   reset(): void {
     this.time = 0;
     for (const coin of this.coins) coin.collected = false;
     this.advance(0);
   }
 
-  /** Bewegt alle Gegner auf den Stand der Levelzeit. */
+  /** Moves every enemy to the current level time. */
   advance(dt: number): void {
     this.time += dt;
     for (const enemy of this.enemies) enemy.positionAt(this.time);

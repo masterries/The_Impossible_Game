@@ -1,4 +1,4 @@
-/** Zentrale Spielkonstanten – alle Längen in Logik-Pixeln. */
+/** Central game constants. All lengths are logical pixels. */
 
 export const TILE = 40;
 export const COLS = 20;
@@ -16,11 +16,11 @@ export const PLAYER_SPEED = 235; // px/s
 export const ENEMY_RADIUS = 11;
 export const COIN_RADIUS = 8;
 
-/** Sekunden, die der Todes-Effekt läuft, bevor neu gestartet wird. */
+/** Seconds the death effect runs before the level restarts. */
 export const DEATH_FREEZE = 0.55;
 
 export const COLORS = {
-  // Spielfeld
+  // Playfield
   outside: '#9fa8bd',
   floorA: '#ffffff',
   floorB: '#e3e6f7',
@@ -34,7 +34,7 @@ export const COLORS = {
   player: '#ff2d2d',
   playerHi: '#ff8a8a',
 
-  // Bedienoberfläche im Stil klassischer Desktop-Fenster
+  // Interface, styled after classic desktop windows
   face: '#d4d0c8',
   faceLight: '#ffffff',
   faceShadow: '#808080',
@@ -56,3 +56,4 @@ export const FONT_HEAD = `bold 30px ${HEAD}`;
 export const FONT_SUB = `bold 15px ${HEAD}`;
 export const FONT_BODY = `12px ${UI}`;
 export const FONT_BODY_BOLD = `bold 12px ${UI}`;
+export const FONT_GLYPH = `bold 17px ${UI}`;

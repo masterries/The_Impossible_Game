@@ -13,13 +13,13 @@ export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-/** Positiver Modulo – anders als `%` auch für negative Werte korrekt. */
+/** Positive modulo, unlike `%` it also works for negative values. */
 export function wrap(value: number, length: number): number {
   const m = value % length;
   return m < 0 ? m + length : m;
 }
 
-/** Kürzester Abstand zwischen einem Punkt und einer achsenparallelen Box. */
+/** Shortest distance between a point and an axis-aligned box. */
 export function pointBoxDistanceSq(
   px: number,
   py: number,

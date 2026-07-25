@@ -3,7 +3,9 @@
 .claude
 node_modules
 dist
+data
 .vite
+server
 *.md
 .env
 .env.*

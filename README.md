@@ -1,178 +1,240 @@
 # The Impossible Game
 
-Ein Browser-Remake von World's Hardest Game. Man steuert einen roten Würfel, weicht blauen
-Kugeln aus, sammelt die Münzen ein und läuft ins grüne Feld. Es gibt sechs Level und keine
-Speicherpunkte.
+A browser remake of World's Hardest Game. You steer a red cube, dodge blue balls, collect
+every coin and reach the green field. Six levels, no checkpoints, and a global scoreboard.
 
-Gebaut mit TypeScript, Vite und Canvas 2D. Ohne Spiel-Engine, ohne Bilder, ohne
-Sounddateien: Grafik und Töne entstehen zur Laufzeit. Das JS-Bundle liegt bei rund 22 kB
-(8 kB gzip), dazu kommen 3 kB CSS.
+Built with TypeScript, Vite and Canvas 2D. No game engine, no images, no audio files:
+graphics and sound are generated at runtime. The bundle is about 30 kB of JavaScript
+(11 kB gzipped) plus 5 kB of CSS. The scoreboard API is plain Node with `node:sqlite` and
+has no npm dependencies at all.
 
-## Spielen
+## Playing
 
-| Taste                 | Wirkung           |
-| --------------------- | ----------------- |
-| Pfeiltasten oder WASD | Bewegen           |
-| Leertaste             | Menü bestätigen   |
-| R                     | Level neu starten |
-| P oder Esc            | Pause             |
+| Input                 | Effect              |
+| --------------------- | ------------------- |
+| Arrow keys or WASD    | Move                |
+| Drag on the playfield | Move (touch)        |
+| Space or tap          | Confirm a dialog    |
+| R                     | Restart the level   |
+| P or Esc              | Pause               |
 
-Das grüne Ziel öffnet sich erst, wenn alle Münzen des Levels eingesammelt sind; solange
-pulsiert es dunkel. Jeder Treffer setzt Level, Münzen und Gegner zurück. Die geringste
-Anzahl Tode über einen kompletten Durchlauf wird im localStorage gespeichert.
+The green goal only opens once every coin in the level is collected; until then it pulses
+dark. Any hit resets the level, the coins and the enemies. Your personal best is kept in
+localStorage, and finishing all six levels submits your run to the scoreboard.
 
-## Entwickeln
+On phones the game is played by dragging anywhere on the field: a virtual stick appears
+under your finger. Pause and restart sit as buttons in the status bar, so no keyboard is
+needed. When the canvas gets narrow the status bar and the dialogs switch to a larger
+layout, and the page suggests turning the phone sideways.
+
+## Developing
 
 ```bash
 npm install
 ```
 
+The game and the scoreboard API run as two processes. The dev server proxies `/api` to the
+API, so both are same-origin during development just like in production.
+
 ```bash
 npm run dev
 ```
 
-| Skript              | Zweck                                            |
-| ------------------- | ------------------------------------------------ |
-| `npm run dev`       | Entwicklungsserver mit automatischem Neuladen    |
-| `npm run build`     | Typprüfung und Produktions-Build nach `dist/`    |
-| `npm run preview`   | `dist/` lokal ausliefern                         |
-| `npm run typecheck` | nur `tsc --noEmit`                               |
+```bash
+npm run api
+```
 
-Der Entwicklungsserver nutzt Port 5173 oder, falls gesetzt, `$PORT`.
+| Script              | Purpose                                       |
+| ------------------- | --------------------------------------------- |
+| `npm run dev`       | Dev server with hot reload on port 5173       |
+| `npm run api`       | Scoreboard API on port 8787                   |
+| `npm run build`     | Type check and production build into `dist/`  |
+| `npm run preview`   | Serve `dist/` locally                         |
+| `npm run typecheck` | `tsc --noEmit` only                           |
+| `npm test`          | Smoke test for the scoreboard API             |
 
-## Container
+Both ports can be overridden with `PORT` and `API_PORT`. Without the API the game is fully
+playable, the board just reports that it is offline.
 
-Zweistufiger Build: Node erzeugt das Bundle, ausgeliefert wird es von nginx. Im fertigen
-Image steckt weder Node noch `node_modules`.
+## Scoreboard
+
+Ranked by fewest deaths first, then by the faster run. Only complete runs of all six levels
+count.
+
+| Route                   | Method | Purpose                                          |
+| ----------------------- | ------ | ------------------------------------------------ |
+| `/api/health`           | GET    | Liveness, also used by the container healthcheck |
+| `/api/scores?limit=10`  | GET    | Top entries, ranked                              |
+| `/api/runs`             | POST   | Issues a ticket for a run that is about to start  |
+| `/api/scores`           | POST   | Submits a finished run, needs a valid ticket     |
+| `/api/scores/<id>`      | DELETE | Removes one entry, needs `x-admin-token`         |
+
+### About cheating
+
+There is no login, so the board cannot be trustworthy in a strict sense. What it does have:
+
+- The server issues a ticket when a run starts and checks on submission that enough real
+  time has passed on the server side. A ticket is signed with `SCORE_SECRET`, expires after
+  six hours and can be redeemed exactly once.
+- Names, death counts and run times are validated and clamped; runs under 25 seconds are
+  rejected outright.
+- Rate limits per IP: 20 submissions per hour, 120 reads per minute.
+
+That stops replays, curl spam and obviously faked times. It does not stop somebody who
+reads the client code and drives the API deliberately. If the board gets polluted, set
+`ADMIN_TOKEN` and delete individual entries:
+
+```bash
+curl -X DELETE -H "x-admin-token: $ADMIN_TOKEN" https://your-host/api/scores/42
+```
+
+## Containers
+
+Two images. The web image is a two-stage build: Node produces the bundle, nginx serves it,
+and the result contains neither Node nor `node_modules` (48 MB). The API image is Node 24
+with a single JavaScript file (164 MB) and runs as an unprivileged user.
 
 ```bash
 docker build -t impossible-game .
 ```
 
 ```bash
+docker build -t impossible-game-api ./server
+```
+
+For a quick look at the game alone, without the scoreboard:
+
+```bash
 docker run --rm -p 8080:80 impossible-game
 ```
 
-Danach http://localhost:8080 aufrufen. `/healthz` antwortet mit `ok` und wird auch vom
-HEALTHCHECK des Containers benutzt.
+The nginx config lives in [`docker/nginx.conf`](docker/nginx.conf). It enables gzip, caches
+the hashed files under `/assets/` for a year, serves `index.html` with `no-cache` and sets
+the usual protection headers. Unknown paths return a real 404, because the game is a single
+page without its own routing.
 
-Die nginx-Konfiguration liegt in [`docker/nginx.conf`](docker/nginx.conf). Sie schaltet
-gzip ein, cacht die gehashten Dateien unter `/assets/` ein Jahr lang, liefert `index.html`
-mit `no-cache` aus und setzt ein paar übliche Schutz-Header. Unbekannte Pfade ergeben einen
-echten 404, weil das Spiel eine einzelne Seite ohne eigenes Routing ist.
+## Deploying behind Traefik
 
-## Auf dem Server hinter Traefik
+Requires a running Traefik with the external network `traefik-net`, the entrypoint
+`websecure` and the certificate resolver `letsencrypt`.
 
-Vorausgesetzt wird ein laufender Traefik mit dem externen Netzwerk `traefik-net`, dem
-Einstiegspunkt `websecure` und dem Zertifikatsdienst `letsencrypt`. Genau die Labels, die
-auch andere Dienste in diesem Aufbau benutzen, stehen in
-[`docker-compose.yml`](docker-compose.yml).
+Both containers share one hostname. Traefik routes `/api` to the scoreboard with a higher
+router priority, everything else goes to nginx. That keeps the API same-origin, so there is
+no CORS to configure.
 
-Auf dem Server das Repository klonen, Domain eintragen, starten:
+Clone the repository on the server, fill in the environment, start:
 
 ```bash
 cp .env.example .env
+```
+
+Generate a signing secret and put it into `.env` as `SCORE_SECRET`:
+
+```bash
+openssl rand -hex 32
 ```
 
 ```bash
 docker compose up -d --build
 ```
 
-`GAME_HOST` aus der `.env` bestimmt die Domain im Traefik-Router. Fehlt die Variable, bricht
-Compose mit einer Meldung ab, statt eine falsche Route anzulegen.
+`GAME_HOST` decides the domain in the Traefik router. If a required variable is missing,
+Compose stops with a message instead of creating a broken route. The scoreboard database
+lives in the named volume `impossible-game_scores` and survives rebuilds.
 
-### Ohne Quellcode auf dem Server
+### Without source code on the server
 
-Der Arbeitsablauf in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) baut bei jedem
-Push auf `main` ein Image und lädt es in die GitHub Container Registry. Der Name steht dort
-fest auf `ghcr.io/<dein-github-name>/impossible-game`, hängt also nicht am
-Repository-Namen. Auf dem Server reicht dann:
+The workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds both images on
+every push to `main` and pushes them to the GitHub Container Registry. The names are fixed
+to `ghcr.io/<your-github-name>/impossible-game` and `-api`, so they do not depend on the
+repository name. On the server:
 
 ```bash
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-Dafür in der `.env` zusätzlich `GAME_IMAGE` setzen. Ist das Paket privat, vorher einmalig
-`docker login ghcr.io` mit einem Zugriffstoken (Berechtigung `read:packages`).
+That needs `GAME_IMAGE` and `API_IMAGE` in `.env` as well. If the packages are private, run
+`docker login ghcr.io` once with a personal access token that has `read:packages`.
 
-Aktualisieren:
+Updating:
 
 ```bash
 docker compose -f docker-compose.ghcr.yml pull && docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-Beide Compose-Dateien beschreiben denselben Container unter demselben Projektnamen, also
-immer nur eine davon benutzen.
+Both compose files describe the same containers under the same project name, so only ever
+use one of them.
 
-## Level bearbeiten
+## Editing levels
 
-Ein Level ist ein Raster aus 20 × 12 Zeichen in [`src/game/levels.ts`](src/game/levels.ts):
+A level is a 20 × 12 character grid in [`src/game/levels.ts`](src/game/levels.ts):
 
-| Zeichen | Bedeutung        |
-| ------- | ---------------- |
-| `#`     | Wand oder Leere  |
-| `.`     | Boden            |
-| `S`     | Startzone (grün) |
-| `E`     | Zielzone (grün)  |
-| `C`     | Münze            |
+| Character | Meaning         |
+| --------- | --------------- |
+| `#`       | Wall or void    |
+| `.`       | Floor           |
+| `S`       | Start zone      |
+| `E`       | End zone        |
+| `C`       | Coin            |
 
-Gegner beschreiben drei Helfer. Längen sind Kacheln, `speed` sind Kacheln pro Sekunde,
-`phase` (0 bis 1) verschiebt den Startpunkt innerhalb eines Zyklus.
+Enemies are described by three helpers. Lengths are tiles, `speed` is tiles per second and
+`phase` (0 to 1) shifts the starting point within one cycle.
 
 ```ts
-hori(4, 3, 16, 6.5, 0.25); // Zeile 4, Spalte 3 bis 16, versetzt um einen Viertelzyklus
-vert(9, 1, 10, 5);         // Spalte 9, Zeile 1 bis 10
-ring([9, 6], 3.5, 7, 8);   // 8 Gegner im Kreis, Radius 3,5
+hori(4, 3, 16, 6.5, 0.25); // row 4, column 3 to 16, offset by a quarter cycle
+vert(9, 1, 10, 5);         // column 9, row 1 to 10
+ring([9, 6], 3.5, 7, 8);   // 8 enemies in a circle, radius 3.5
 ```
 
-Ein Unterschied, der beim Bauen leicht stolpern lässt: `hori` und `vert` erwarten
-Kachelindizes und rechnen selbst auf die Kachelmitte um. `ring` bekommt den Mittelpunkt
-direkt, dort ist `[9, 6]` die Ecke zwischen vier Kacheln und `[9.5, 6.5]` die Mitte von
-Kachel (9|6).
+One difference that is easy to trip over: `hori` and `vert` take tile indices and convert to
+the tile centre themselves. `ring` takes the centre directly, so `[9, 6]` is the corner
+where four tiles meet and `[9.5, 6.5]` is the middle of tile (9|6).
 
-Beim Laden wird das Raster geprüft. Falsche Zeilenzahl, falsche Zeilenlänge, unbekannte
-Zeichen oder eine fehlende Start- beziehungsweise Zielzone werfen sofort einen Fehler mit
-Levelnamen.
+The grid is validated on load. A wrong row count, a wrong row length, an unknown character
+or a missing start or end zone throws immediately, naming the level.
 
-Tempo, Kachelgröße, Farben und Schriften stehen in
-[`src/game/config.ts`](src/game/config.ts).
+Speed, tile size, colours and fonts live in [`src/game/config.ts`](src/game/config.ts).
 
-## Aufbau
+## Layout
 
 ```
 src/
-  engine/          spielunabhängige Bausteine
-    loop.ts        Spielschleife mit festem Zeitschritt
-    input.ts       Tastatur, gedrückt und gerade gedrückt
-    renderer.ts    Canvas mit fester Logikauflösung, HiDPI-Skalierung
-    audio.ts       erzeugte Töne über die Web Audio API
-    math.ts        Vektor- und Kollisionshelfer
+  engine/          reusable, game-independent pieces
+    loop.ts        fixed timestep game loop
+    input.ts       keyboard, isDown and wasPressed
+    pointer.ts     touch and mouse, virtual stick and taps
+    renderer.ts    canvas with a fixed logical resolution, HiDPI scaling
+    audio.ts       synthesised tones over the Web Audio API
+    math.ts        vector and collision helpers
   game/
-    config.ts      Konstanten
-    types.ts       Datenmodell für Level und Gegner
-    levels.ts      die sechs Level
-    level.ts       geladenes Level: Kacheln, Münzen, Zonen, Gegner
-    enemy.ts       Bewegung auf Streckenzügen und Kreisbahnen
-    player.ts      Bewegung und Wandkollision
-    particles.ts   Effekte für Tod und Münzen
-    game.ts        Zustandsautomat, Kollisionen, Zeichnen
-  main.ts          Einstiegspunkt
-  style.css        Seitenrahmen um das Spielfeld
-docker/nginx.conf  Auslieferung im Container
+    config.ts      constants
+    types.ts       level and enemy data model
+    levels.ts      the six levels
+    level.ts       a loaded level: tiles, coins, zones, enemies
+    enemy.ts       movement along polylines and circles
+    player.ts      movement and wall collision
+    particles.ts   death and coin effects
+    game.ts        state machine, collisions, rendering
+  scoreboard.ts    client for the scoreboard API
+  main.ts          entry point
+  style.css        the page around the canvas
+server/
+  index.js         scoreboard API, no dependencies
+  test.js          HTTP smoke test against the real server
+docker/nginx.conf  how the container serves the build
 ```
 
-Zwei Details bestimmen das Spielgefühl.
+Two details shape how the game feels.
 
-Die Schleife rechnet mit festem Zeitschritt (1/120 s) und zeichnet einmal pro Bild. Damit
-ist das Spiel auf 60 und auf 240 Hz gleich schwer. Bei variablem `dt` käme man mit hoher
-Bildrate durch Lücken, die es bei 60 Hz nicht gibt.
+The loop runs at a fixed timestep (1/120 s) and renders once per frame, so the game is
+equally hard at 60 and at 240 Hz. With a variable `dt` a high frame rate would let you
+through gaps that do not exist at 60 Hz.
 
-Gegner haben keinen veränderlichen Zustand. `Enemy.positionAt(t)` ist eine reine Funktion
-der Levelzeit, ein Tod setzt nur `Level.time` auf 0. Jeder Versuch sieht dadurch exakt
-gleich aus, und ein Level lässt sich auswendig lernen statt zu würfeln.
+Enemies hold no mutable state. `Enemy.positionAt(t)` is a pure function of the level time
+and a death only resets `Level.time` to 0. Every attempt therefore looks exactly the same,
+which makes a level something you learn rather than something you gamble on.
 
-## Hinweis
+## Note
 
-Fan-Remake ohne Verbindung zu Snubby Land oder Stephen Critoph, den Urhebern von World's
-Hardest Game. Der Code hier ist eine Neuimplementierung, es wurden keine Originaldateien
-verwendet.
+Fan remake, not affiliated with Snubby Land or Stephen Critoph, the authors of World's
+Hardest Game. This is a reimplementation, no original files were used.

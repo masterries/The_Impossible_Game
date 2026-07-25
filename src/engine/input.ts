@@ -11,12 +11,12 @@ const MOVE_KEYS: Record<string, 'up' | 'down' | 'left' | 'right'> = {
   KeyD: 'right',
 };
 
-/** Tasten, deren Browser-Standardverhalten (Scrollen) wir unterdrücken. */
+/** Keys whose default browser behaviour (scrolling) we suppress. */
 const SWALLOW = new Set([...Object.keys(MOVE_KEYS), 'Space']);
 
 /**
- * Tastatur-Abfrage mit Frame-Semantik:
- * `isDown` gilt dauerhaft, `wasPressed` nur im Frame des Tastendrucks.
+ * Keyboard state with frame semantics: `isDown` holds while a key is pressed,
+ * `wasPressed` is true only during the frame the key went down.
  */
 export class Input {
   private readonly down = new Set<string>();
@@ -30,11 +30,10 @@ export class Input {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.repeat) {
-      if (SWALLOW.has(event.code)) event.preventDefault();
-      return;
-    }
+    // Never swallow keys aimed at a text field.
+    if (isTypingTarget(event.target)) return;
     if (SWALLOW.has(event.code)) event.preventDefault();
+    if (event.repeat) return;
     this.down.add(event.code);
     this.pressed.add(event.code);
   };
@@ -43,7 +42,7 @@ export class Input {
     this.down.delete(event.code);
   };
 
-  /** Alle Tasten loslassen – z. B. wenn das Fenster den Fokus verliert. */
+  /** Release every key, for example when the window loses focus. */
   readonly reset = (): void => {
     this.down.clear();
     this.pressed.clear();
@@ -57,12 +56,12 @@ export class Input {
     return codes.some((code) => this.pressed.has(code));
   }
 
-  /** Irgendeine „Weiter"-Taste (Leertaste / Enter). */
+  /** Any "continue" key (space or enter). */
   anyConfirm(): boolean {
     return this.wasPressed('Space', 'Enter', 'NumpadEnter');
   }
 
-  /** Bewegungsrichtung, auf Länge 1 normiert (Diagonalen sind nicht schneller). */
+  /** Movement direction, normalised so diagonals are not faster. */
   get axis(): Vec2 {
     let x = 0;
     let y = 0;
@@ -93,7 +92,7 @@ export class Input {
     return this.axisVec;
   }
 
-  /** Muss am Ende jedes Frames aufgerufen werden. */
+  /** Must be called at the end of every frame. */
   endFrame(): void {
     this.pressed.clear();
   }
@@ -103,4 +102,10 @@ export class Input {
     this.target.removeEventListener('keyup', this.onKeyUp as EventListener);
     window.removeEventListener('blur', this.reset);
   }
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }

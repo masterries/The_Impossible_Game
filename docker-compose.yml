@@ -1,11 +1,11 @@
-# Baut das Image aus dem Quellcode und hängt es an Traefik.
-# Für ein fertiges Image aus der GitHub Container Registry: docker-compose.ghcr.yml
-# Beide Dateien beschreiben denselben Container, also immer nur eine benutzen.
+# Builds both images from source and hangs them on Traefik.
+# For prebuilt images from the GitHub Container Registry: docker-compose.ghcr.yml
+# Both files describe the same containers, so only ever use one of them.
 
 name: impossible-game
 
 services:
-  impossible-game:
+  web:
     build:
       context: .
     image: impossible-game:local
@@ -16,14 +16,48 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-net"
-      - "traefik.http.routers.impossible-game.rule=Host(`${GAME_HOST:?GAME_HOST fehlt, siehe .env.example}`)"
+      - "traefik.http.routers.impossible-game.rule=Host(`${GAME_HOST:?GAME_HOST is missing, see .env.example}`)"
       - "traefik.http.routers.impossible-game.entrypoints=websecure"
       - "traefik.http.routers.impossible-game.tls=true"
       - "traefik.http.routers.impossible-game.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.impossible-game.priority=1"
       - "traefik.http.services.impossible-game.loadbalancer.server.port=80"
       - "traefik.http.services.impossible-game.loadbalancer.server.scheme=http"
     networks:
       - traefik-net
+
+  api:
+    build:
+      context: ./server
+    image: impossible-game-api:local
+    container_name: impossible-game-api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Signs the run tickets. Keep it stable, otherwise every ticket handed out
+      # before a restart becomes worthless.
+      SCORE_SECRET: ${SCORE_SECRET:?SCORE_SECRET is missing, see .env.example}
+      # Optional: enables DELETE /api/scores/<id> for cleaning up junk entries.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    volumes:
+      - scores:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      # Higher priority than the web router, so /api never reaches nginx.
+      - "traefik.http.routers.impossible-game-api.rule=Host(`${GAME_HOST}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.impossible-game-api.entrypoints=websecure"
+      - "traefik.http.routers.impossible-game-api.tls=true"
+      - "traefik.http.routers.impossible-game-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.impossible-game-api.priority=100"
+      - "traefik.http.services.impossible-game-api.loadbalancer.server.port=8787"
+      - "traefik.http.services.impossible-game-api.loadbalancer.server.scheme=http"
+    networks:
+      - traefik-net
+
+volumes:
+  scores:
 
 networks:
   traefik-net:

@@ -5,7 +5,7 @@ import type { Level } from './level';
 const HALF = PLAYER_SIZE / 2;
 const EPS = 1e-6;
 
-/** Der rote Würfel. Bewegt sich achsenweise und wird an Wänden hart gestoppt. */
+/** The red cube. Moves one axis at a time and stops hard at walls. */
 export class Player {
   x = 0;
   y = 0;
@@ -39,7 +39,7 @@ export class Player {
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         if (level.walkable(c, r)) continue;
-        // Bei Bewegung nach rechts zählt die am weitesten links liegende Wand.
+        // Moving right, the leftmost wall wins; moving left, the rightmost.
         blocker = blocker < 0 ? c : dir > 0 ? Math.min(blocker, c) : Math.max(blocker, c);
       }
     }

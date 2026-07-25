@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="The Impossible Game - ein Remake von World's Hardest Game im Browser." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="The Impossible Game - a browser remake of World's Hardest Game." />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>The Impossible Game</title>
     <link
       rel="icon"
@@ -14,34 +15,42 @@
     <div class="page">
       <div class="masthead">
         <h1>The Impossible Game</h1>
-        <p>Ein Remake von World&rsquo;s Hardest Game &middot; 6 Level &middot; keine Speicherpunkte</p>
+        <p>A remake of World&rsquo;s Hardest Game &middot; 6 levels &middot; no checkpoints</p>
       </div>
 
       <div class="screen">
-        <canvas id="game" width="800" height="540" tabindex="0" aria-label="Spielfeld"></canvas>
+        <canvas id="game" width="800" height="540" tabindex="0" aria-label="Playfield"></canvas>
       </div>
 
+      <p class="rotate-hint">Turn your phone sideways for a bigger playfield.</p>
+
       <div class="toolbar">
-        <button id="sound-toggle" class="button" type="button" aria-pressed="true">Ton: an</button>
-        <span class="toolbar__note">Der Ton startet aus Browser-Gr&uuml;nden erst nach der ersten Eingabe.</span>
+        <button id="sound-toggle" class="button" type="button" aria-pressed="true">Sound: on</button>
+        <span class="toolbar__note">
+          Drag anywhere on the field to steer. Sound starts after your first input.
+        </span>
       </div>
 
       <div class="columns">
         <div class="col">
-          <h2>Steuerung</h2>
+          <h2>Controls</h2>
           <table class="grid">
             <tbody>
               <tr>
-                <th scope="row">Pfeiltasten / W A S D</th>
-                <td>Bewegen</td>
+                <th scope="row">Arrow keys / W A S D</th>
+                <td>Move</td>
               </tr>
               <tr>
-                <th scope="row">Leertaste</th>
-                <td>Menü best&auml;tigen</td>
+                <th scope="row">Drag on the field</th>
+                <td>Move (touch)</td>
+              </tr>
+              <tr>
+                <th scope="row">Space or tap</th>
+                <td>Confirm a dialog</td>
               </tr>
               <tr>
                 <th scope="row">R</th>
-                <td>Level neu starten</td>
+                <td>Restart the level</td>
               </tr>
               <tr>
                 <th scope="row">P / Esc</th>
@@ -52,19 +61,53 @@
         </div>
 
         <div class="col">
-          <h2>Regeln</h2>
+          <h2>Rules</h2>
           <ul class="rules">
-            <li><span class="chip chip--player"></span> Du bist der rote W&uuml;rfel.</li>
-            <li><span class="chip chip--coin"></span> Sammle alle M&uuml;nzen eines Levels ein.</li>
-            <li><span class="chip chip--goal"></span> Das gr&uuml;ne Ziel &ouml;ffnet erst danach.</li>
-            <li><span class="chip chip--enemy"></span> Blau ber&uuml;hrt heisst: von vorn.</li>
+            <li><span class="chip chip--player"></span> You are the red cube.</li>
+            <li><span class="chip chip--coin"></span> Collect every coin in the level.</li>
+            <li><span class="chip chip--goal"></span> Only then does the green goal open.</li>
+            <li><span class="chip chip--enemy"></span> Touching blue sends you back.</li>
           </ul>
         </div>
       </div>
 
+      <div class="board">
+        <h2>Scoreboard</h2>
+
+        <form class="board__form" id="score-form" autocomplete="off">
+          <label for="player-name">Your name</label>
+          <input
+            id="player-name"
+            name="player-name"
+            type="text"
+            maxlength="16"
+            placeholder="up to 16 characters"
+            aria-describedby="board-status"
+          />
+          <button class="button" id="board-refresh" type="submit">Refresh</button>
+        </form>
+
+        <p class="board__status" id="board-status" role="status">Loading scoreboard&hellip;</p>
+
+        <table class="grid board__table">
+          <thead>
+            <tr>
+              <th scope="col" class="board__rank">#</th>
+              <th scope="col">Player</th>
+              <th scope="col" class="board__num">Deaths</th>
+              <th scope="col" class="board__num">Time</th>
+            </tr>
+          </thead>
+          <tbody id="board-body"></tbody>
+        </table>
+
+        <p class="board__note">
+          Ranked by fewest deaths, then fastest run. Finish all six levels to get on the board.
+        </p>
+      </div>
+
       <div class="footer">
-        Fan-Remake ohne Verbindung zu Snubby Land oder Stephen Critoph.
-        Quellcode auf GitHub.
+        Fan remake, not affiliated with Snubby Land or Stephen Critoph. Source on GitHub.
       </div>
     </div>
 
