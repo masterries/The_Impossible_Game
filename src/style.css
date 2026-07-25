@@ -257,8 +257,87 @@ canvas:focus-visible {
 
 /* ------------------------------------------------------------------ */
 
+.toolbar__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.toolbar__field select {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 6px;
+  min-height: 32px;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid var(--ink);
+  border-top-color: var(--face-shadow);
+  border-left-color: var(--face-shadow);
+}
+
+.toolbar__field select:focus-visible {
+  outline: 2px dotted var(--ink);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+
+.modes {
+  margin-top: 16px;
+}
+
+.modes__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modes__note {
+  margin: 8px 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.level-grid .button {
+  padding: 6px 0;
+  min-height: 36px;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .level-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .level-grid .button {
+    min-height: 42px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+
 .board {
   margin-top: 16px;
+}
+
+.board__tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.board__tabs .button[aria-pressed='true'] {
+  border-color: var(--face-shadow) var(--face-light) var(--face-light) var(--face-shadow);
+  background: #c4bfb6;
+  color: var(--ink);
 }
 
 .board__form {

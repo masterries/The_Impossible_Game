@@ -23,6 +23,33 @@ const vert = (x: number, y0: number, y1: number, speed: number, phase = 0): Enem
   phase,
 });
 
+/** A spot that swells into a deadly bubble and shrinks again. */
+const pulse = (
+  at: TilePoint,
+  minRadius: number,
+  maxRadius: number,
+  period: number,
+  phase = 0,
+): EnemySpec => ({ kind: 'pulse', at, minRadius, maxRadius, period, phase });
+
+/** Fires a bullet along one axis on a fixed interval. */
+const turret = (
+  at: TilePoint,
+  dir: 'up' | 'down' | 'left' | 'right',
+  interval: number,
+  speed: number,
+  range: number,
+  phase = 0,
+): EnemySpec => ({ kind: 'turret', at, dir, interval, speed, range, phase });
+
+/** Wakes up after `delay` seconds and then homes in on the player. */
+const chaser = (at: TilePoint, speed: number, delay = 1.5): EnemySpec => ({
+  kind: 'chaser',
+  at,
+  speed,
+  delay,
+});
+
 /** Evenly spaced ring of `count` enemies. */
 const ring = (
   center: TilePoint,
@@ -195,7 +222,7 @@ export const LEVELS: readonly LevelDef[] = [
 
   {
     name: 'The Wave',
-    hint: 'Every row is offset. Two belts cut across the diagonal.',
+    hint: 'Every row is offset. Two belts cut across, and the walls shoot.',
     grid: [
       '####################',
       '##SS............EE##',
@@ -210,7 +237,11 @@ export const LEVELS: readonly LevelDef[] = [
       '##SS............EE##',
       '####################',
     ],
-    enemies: Array.from({ length: 10 }, (_, i) => hori(i + 1, 4, 15, 7, (i * 0.1) % 1)),
+    enemies: [
+      ...Array.from({ length: 8 }, (_, i) => hori(i + 2, 4, 15, 7, (i * 0.12) % 1)),
+      turret([3.5, 1.5], 'right', 1.5, 8, 13, 0),
+      turret([16.5, 10.5], 'left', 1.5, 8, 13, 0.5),
+    ],
   },
 
   {
@@ -243,7 +274,7 @@ export const LEVELS: readonly LevelDef[] = [
 
   {
     name: 'Cross Current',
-    hint: 'Every second column drags the other way. Cross in short steps.',
+    hint: 'Columns drag both ways, and the bubbles swell without warning.',
     grid: [
       '####################',
       '##SS............EE##',
@@ -269,14 +300,14 @@ export const LEVELS: readonly LevelDef[] = [
       hori(4, 4, 15, 7, 0.3),
       hori(7, 4, 15, 7, 0.6),
       hori(10, 4, 15, 7, 0.15),
-      vert(6, 1, 10, 6, 0),
-      vert(13, 1, 10, 6, 0.5),
+      pulse([7, 4], 0.2, 1.4, 2.6, 0),
+      pulse([12, 8], 0.2, 1.4, 2.6, 0.5),
     ],
   },
 
   {
     name: 'Wormhole',
-    hint: 'The coloured rings are pairs. Step on one to come out of the other.',
+    hint: 'Coloured rings are pairs. The ringed ball follows you, so keep moving.',
     grid: [
       '####################',
       '####################',
@@ -301,8 +332,9 @@ export const LEVELS: readonly LevelDef[] = [
       ...ring([7, 6], 2.2, 5.5, 4, 1),
       ...ring([14, 6], 1.6, 5.5, 3, -1),
       vert(4, 2, 9, 5, 0),
-      vert(9, 2, 9, 5, 0.5),
       vert(12, 2, 9, 5.5, 0.25),
+      // Slower than the player, so a teleporter is the way to shake it off.
+      chaser([9.5, 5.5], 2.6, 2),
     ],
   },
 
@@ -361,8 +393,10 @@ export const LEVELS: readonly LevelDef[] = [
       hori(10, 4, 15, 7, 0.5),
       vert(4, 1, 10, 6, 0.25),
       vert(15, 1, 10, 6, 0.75),
-      vert(6, 1, 10, 6.5, 0),
-      vert(12, 1, 10, 6.5, 0.5),
+      turret([3.5, 5.5], 'right', 1.9, 9, 4, 0),
+      turret([16.5, 6.5], 'left', 1.9, 9, 4, 0.5),
+      pulse([9, 2], 0.2, 1.1, 3, 0.25),
+      pulse([9, 10], 0.2, 1.1, 3, 0.75),
     ],
   },
 
@@ -397,8 +431,11 @@ export const LEVELS: readonly LevelDef[] = [
       vert(4, 1, 10, 6.5, 0.25),
       hori(1, 4, 7, 6, 0),
       hori(10, 9, 15, 6, 0.5),
-      hori(5, 9, 12, 5.5, 0.3),
-      hori(6, 9, 12, 5.5, 0.8),
+      turret([3.5, 5.5], 'right', 1.6, 9, 3.5, 0),
+      turret([16.5, 6.5], 'left', 1.6, 9, 3.5, 0.5),
+      pulse([6, 8], 0.2, 1.2, 2.4, 0),
+      pulse([15, 3], 0.2, 1.2, 2.4, 0.5),
+      chaser([10.5, 5.5], 2.8, 3),
     ],
   },
 ];

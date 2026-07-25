@@ -34,6 +34,40 @@ export type EnemySpec =
       phase?: number;
       /** `pingpong` walks the line back and forth, `cycle` closes it into a ring. */
       loop?: 'pingpong' | 'cycle';
+    }
+  | {
+      /** Sits still and breathes: the danger radius grows and shrinks. */
+      kind: 'pulse';
+      at: TilePoint;
+      /** Radii in tiles. */
+      minRadius: number;
+      maxRadius: number;
+      /** Seconds for one grow-shrink cycle. */
+      period: number;
+      phase?: number;
+    }
+  | {
+      /** Fires a bullet along one axis every `interval` seconds. */
+      kind: 'turret';
+      at: TilePoint;
+      dir: 'up' | 'down' | 'left' | 'right';
+      interval: number;
+      /** Tiles per second. */
+      speed: number;
+      /** How far a bullet flies, in tiles. */
+      range: number;
+      phase?: number;
+    }
+  | {
+      /**
+       * Homes in on the player. The only enemy with state, so it is the one
+       * thing in a level that cannot be memorised as a fixed pattern.
+       */
+      kind: 'chaser';
+      at: TilePoint;
+      speed: number;
+      /** Seconds before it wakes up after a level start. */
+      delay?: number;
     };
 
 export interface LevelDef {

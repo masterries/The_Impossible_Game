@@ -62,7 +62,7 @@ function newTicket() {
   return call('/api/runs', { method: 'POST' });
 }
 
-function post(ticket, { name, deaths, durationMs, levels }) {
+function post(ticket, { name, deaths, durationMs, levels, mode }) {
   return call('/api/scores', {
     method: 'POST',
     body: JSON.stringify({
@@ -70,6 +70,7 @@ function post(ticket, { name, deaths, durationMs, levels }) {
       deaths,
       durationMs,
       levels,
+      ...(mode === undefined ? {} : { mode }),
       runId: ticket.body.runId,
       issuedAt: ticket.body.issuedAt,
       ticket: ticket.body.ticket,
@@ -81,12 +82,14 @@ function post(ticket, { name, deaths, durationMs, levels }) {
  * Plays a run level by level, waiting long enough between levels that the
  * server-side clock agrees with the reported duration.
  */
-async function playRun({ name, deaths, upTo, msPerLevel = 400 }) {
+async function playRun({ name, deaths, upTo, msPerLevel = 400, mode }) {
   const ticket = await newTicket();
   const results = [];
   for (let levels = 1; levels <= upTo; levels++) {
     await sleep(Math.ceil(msPerLevel * 0.95));
-    results.push(await post(ticket, { name, deaths, durationMs: levels * msPerLevel, levels }));
+    results.push(
+      await post(ticket, { name, deaths, durationMs: levels * msPerLevel, levels, mode }),
+    );
   }
   return { ticket, results, last: results[results.length - 1] };
 }
@@ -320,6 +323,56 @@ try {
     {}.polluted === undefined && polluted.status === 403,
     `status ${polluted.status}, polluted=${{}.polluted}`,
   );
+
+  // --- Modes ---------------------------------------------------------------
+  const suddenRun = await playRun({ name: 'Sudden Ace', deaths: 0, upTo: LEVEL_COUNT, mode: 'sudden' });
+  check(
+    'a sudden death run is accepted',
+    suddenRun.last.status === 200 && suddenRun.last.body.mode === 'sudden',
+    JSON.stringify(suddenRun.last.body),
+  );
+
+  const campaignBoard = await call('/api/scores?mode=campaign&limit=50');
+  const suddenBoard = await call('/api/scores?mode=sudden&limit=50');
+  check(
+    'the boards are kept apart',
+    campaignBoard.body.scores.every((s) => s.mode === 'campaign') &&
+      suddenBoard.body.scores.every((s) => s.mode === 'sudden') &&
+      suddenBoard.body.scores.length === 1 &&
+      suddenBoard.body.scores[0].name === 'Sudden Ace' &&
+      !campaignBoard.body.scores.some((s) => s.name === 'Sudden Ace'),
+    `campaign=${campaignBoard.body.scores.length} sudden=${suddenBoard.body.scores.length}`,
+  );
+  check(
+    'an unknown mode falls back to campaign',
+    (await call('/api/scores?mode=practice')).body.mode === 'campaign',
+  );
+
+  const deadlyWin = await playRun({
+    name: 'Impostor',
+    deaths: 3,
+    upTo: LEVEL_COUNT,
+    mode: 'sudden',
+  });
+  check(
+    'a finished sudden death run cannot have deaths',
+    deadlyWin.last.status === 400,
+    `status ${deadlyWin.last.status}`,
+  );
+
+  const badMode = await playRun({ name: 'Ghost', deaths: 0, upTo: 1, mode: 'practice' });
+  check('practice cannot be submitted', badMode.last.status === 400, `status ${badMode.last.status}`);
+
+  const switcher = await playRun({ name: 'Switcher', deaths: 1, upTo: 1, mode: 'campaign' });
+  await sleep(900);
+  const switched = await post(switcher.ticket, {
+    name: 'Switcher',
+    deaths: 1,
+    durationMs: 800,
+    levels: 2,
+    mode: 'sudden',
+  });
+  check('a run cannot change its mode', switched.status === 409, `status ${switched.status}`);
 
   // --- Admin ---------------------------------------------------------------
   const unauthorised = await call(`/api/scores/${full.last.body.id}`, { method: 'DELETE' });

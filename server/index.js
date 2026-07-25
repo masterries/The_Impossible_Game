@@ -80,44 +80,53 @@ function migrate() {
       duration_ms INTEGER NOT NULL,
       levels      INTEGER NOT NULL,
       complete    INTEGER NOT NULL,
+      mode        TEXT    NOT NULL DEFAULT 'campaign',
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_scores_ranked
-      ON scores (complete, deaths ASC, duration_ms ASC, id ASC);
+      ON scores (mode, complete, deaths ASC, duration_ms ASC, id ASC);
 
     CREATE INDEX IF NOT EXISTS idx_scores_progress
-      ON scores (complete, levels DESC, deaths ASC, duration_ms ASC, id ASC);
+      ON scores (mode, complete, levels DESC, deaths ASC, duration_ms ASC, id ASC);
   `);
+
+  // Tables created before modes existed just gain the column.
+  const columns = db.prepare('PRAGMA table_info(scores)').all().map((c) => c.name);
+  if (!columns.includes('mode')) {
+    db.exec("ALTER TABLE scores ADD COLUMN mode TEXT NOT NULL DEFAULT 'campaign'");
+  }
 
   // The old single-use ticket table is no longer needed: a run is identified by
   // its run_id and progress may only ever move forward.
   db.exec('DROP TABLE IF EXISTS spent_tickets');
 }
 
-const findRun = db.prepare('SELECT id, levels FROM scores WHERE run_id = ?');
+const findRun = db.prepare('SELECT id, levels, mode FROM scores WHERE run_id = ?');
 const insertRun = db.prepare(
-  `INSERT INTO scores (run_id, name, deaths, duration_ms, levels, complete, created_at, updated_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  `INSERT INTO scores (run_id, name, deaths, duration_ms, levels, complete, mode, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
 const updateRun = db.prepare(
   `UPDATE scores SET name = ?, deaths = ?, duration_ms = ?, levels = ?, complete = ?, updated_at = ?
    WHERE run_id = ?`,
 );
 const rankedScores = db.prepare(
-  `SELECT id, name, deaths, duration_ms, levels, complete, updated_at FROM scores
-   WHERE complete = 1 ORDER BY deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
+  `SELECT id, name, deaths, duration_ms, levels, complete, mode, updated_at FROM scores
+   WHERE mode = ? AND complete = 1 ORDER BY deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
 );
 const unrankedScores = db.prepare(
-  `SELECT id, name, deaths, duration_ms, levels, complete, updated_at FROM scores
-   WHERE complete = 0 ORDER BY levels DESC, deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
+  `SELECT id, name, deaths, duration_ms, levels, complete, mode, updated_at FROM scores
+   WHERE mode = ? AND complete = 0 ORDER BY levels DESC, deaths ASC, duration_ms ASC, id ASC LIMIT ?`,
 );
-const countComplete = db.prepare('SELECT COUNT(*) AS total FROM scores WHERE complete = 1');
-const countAll = db.prepare('SELECT COUNT(*) AS total FROM scores');
+const countComplete = db.prepare(
+  'SELECT COUNT(*) AS total FROM scores WHERE mode = ? AND complete = 1',
+);
+const countAll = db.prepare('SELECT COUNT(*) AS total FROM scores WHERE mode = ?');
 const countBetter = db.prepare(
   `SELECT COUNT(*) AS better FROM scores
-   WHERE complete = 1 AND (deaths < ? OR (deaths = ? AND duration_ms < ?))`,
+   WHERE mode = ? AND complete = 1 AND (deaths < ? OR (deaths = ? AND duration_ms < ?))`,
 );
 const deleteScore = db.prepare('DELETE FROM scores WHERE id = ?');
 
@@ -236,9 +245,15 @@ function cleanName(value) {
   return [...collapsed].slice(0, NAME_MAX).join('').trim();
 }
 
+/** Practice runs never reach the server, so only these two are storable. */
+const MODES = new Set(['campaign', 'sudden']);
+
 function validateScore(body) {
   const name = cleanName(body.name);
   if (name.length === 0) return { error: 'name must not be empty' };
+
+  const mode = body.mode ?? 'campaign';
+  if (typeof mode !== 'string' || !MODES.has(mode)) return { error: 'unknown mode' };
 
   const { deaths, durationMs, levels } = body;
   if (!Number.isInteger(levels) || levels < 1 || levels > LEVEL_COUNT) {
@@ -254,7 +269,12 @@ function validateScore(body) {
   ) {
     return { error: 'duration is out of range' };
   }
-  return { value: { name, deaths, durationMs, levels } };
+  // A sudden death run ends at the first hit, so a finished one has no deaths.
+  if (mode === 'sudden' && deaths > 0 && levels === LEVEL_COUNT) {
+    return { error: 'a completed sudden death run cannot have deaths' };
+  }
+
+  return { value: { name, deaths, durationMs, levels, mode } };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -329,6 +349,7 @@ function toScore(row, rank) {
     durationMs: row.duration_ms,
     levels: row.levels,
     complete: row.complete === 1,
+    mode: row.mode,
     updatedAt: row.updated_at,
   };
 }
@@ -355,13 +376,16 @@ async function handle(req, res) {
     // SQLite refuses to bind a non-integer to LIMIT, so truncate before clamping.
     const requested = Math.trunc(Number(url.searchParams.get('limit')));
     const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 100) : 10;
+    const asked = url.searchParams.get('mode') ?? 'campaign';
+    const mode = MODES.has(asked) ? asked : 'campaign';
 
     return send(res, 200, {
-      scores: rankedScores.all(limit).map((row, i) => toScore(row, i + 1)),
-      unranked: unrankedScores.all(limit).map((row) => toScore(row, null)),
+      mode,
+      scores: rankedScores.all(mode, limit).map((row, i) => toScore(row, i + 1)),
+      unranked: unrankedScores.all(mode, limit).map((row) => toScore(row, null)),
       levelCount: LEVEL_COUNT,
-      total: countComplete.get().total,
-      totalRuns: countAll.get().total,
+      total: countComplete.get(mode).total,
+      totalRuns: countAll.get(mode).total,
     });
   }
 
@@ -398,6 +422,10 @@ async function handle(req, res) {
     const complete = value.levels === LEVEL_COUNT ? 1 : 0;
     const existing = findRun.get(body.runId);
 
+    if (existing && existing.mode !== value.mode) {
+      return send(res, 409, { error: 'this run belongs to a different mode' });
+    }
+
     if (!existing) {
       insertRun.run(
         body.runId,
@@ -406,6 +434,7 @@ async function handle(req, res) {
         value.durationMs,
         value.levels,
         complete,
+        value.mode,
         now,
         now,
       );
@@ -428,12 +457,15 @@ async function handle(req, res) {
     const row = findRun.get(body.runId);
     return send(res, existing ? 200 : 201, {
       id: row.id,
-      rank: complete ? countBetter.get(value.deaths, value.deaths, value.durationMs).better + 1 : null,
+      rank: complete
+        ? countBetter.get(value.mode, value.deaths, value.deaths, value.durationMs).better + 1
+        : null,
       levels: value.levels,
       levelCount: LEVEL_COUNT,
       complete: complete === 1,
-      total: countComplete.get().total,
-      totalRuns: countAll.get().total,
+      mode: value.mode,
+      total: countComplete.get(value.mode).total,
+      totalRuns: countAll.get(value.mode).total,
     });
   }
 

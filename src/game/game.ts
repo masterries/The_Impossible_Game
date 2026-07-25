@@ -9,7 +9,6 @@ import {
   COLORS,
   COLS,
   DEATH_FREEZE,
-  ENEMY_RADIUS,
   FONT_BODY,
   FONT_BODY_BOLD,
   FONT_GLYPH,
@@ -31,7 +30,26 @@ import { Particles } from './particles';
 import { Player } from './player';
 import { Tile, type TileKind } from './types';
 
-type State = 'title' | 'ready' | 'playing' | 'dying' | 'levelComplete' | 'finished' | 'paused';
+type State =
+  | 'title'
+  | 'ready'
+  | 'playing'
+  | 'dying'
+  | 'levelComplete'
+  | 'finished'
+  | 'paused'
+  /** Sudden death: the single life is gone. */
+  | 'gameOver'
+  /** A practice level was cleared. */
+  | 'practiceDone';
+
+export type GameMode = 'campaign' | 'sudden' | 'practice';
+
+const MODE_LABELS: Record<GameMode, string> = {
+  campaign: 'Campaign',
+  sudden: 'Sudden death',
+  practice: 'Practice',
+};
 
 interface DialogLine {
   text: string;
@@ -71,6 +89,8 @@ export interface RunProgress {
   durationMs: number;
   /** True once the last level is cleared, which is what makes a run rankable. */
   complete: boolean;
+  /** Never `practice`: those runs are not reported at all. */
+  mode: Exclude<GameMode, 'practice'>;
 }
 
 const BEST_KEY = 'impossible-game.best-deaths';
@@ -113,6 +133,7 @@ export class Game {
 
   private levelIndex = 0;
   private level: Level;
+  private mode: GameMode = 'campaign';
   private state: State = 'title';
   private stateTime = 0;
   private deaths = 0;
@@ -159,26 +180,42 @@ export class Game {
     this.stateTime = 0;
   }
 
-  private startRun(): void {
+  /** All twelve levels in order, submitted to the scoreboard. */
+  startCampaign(): void {
+    this.startRun('campaign', 0);
+  }
+
+  /** Same levels, but the first hit ends the run. */
+  startSudden(): void {
+    this.startRun('sudden', 0);
+  }
+
+  /** A single level, never submitted anywhere. */
+  startPractice(index: number): void {
+    this.startRun('practice', Math.min(Math.max(index, 0), LEVELS.length - 1));
+  }
+
+  private startRun(mode: GameMode, index: number): void {
+    this.mode = mode;
     this.deaths = 0;
     this.runTime = 0;
-    this.levelIndex = 0;
-    this.loadLevel(0);
-    this.onRunStart?.();
+    this.levelIndex = index;
+    this.loadLevel(index);
+    if (mode !== 'practice') this.onRunStart?.();
   }
 
   private loadLevel(index: number): void {
     this.levelIndex = index;
     this.level = new Level(LEVELS[index]!);
-    this.level.reset();
     this.player.spawn(this.level);
+    this.level.reset(this.player.x, this.player.y);
     this.particles.clear();
     this.setState('ready');
   }
 
   private restartLevel(): void {
-    this.level.reset();
     this.player.spawn(this.level);
+    this.level.reset(this.player.x, this.player.y);
     this.particles.clear();
     this.setState('playing');
   }
@@ -194,6 +231,12 @@ export class Game {
 
   private completeLevel(): void {
     this.particles.burst(this.player.x, this.player.y, '#37d67a', 22, 220, 6);
+
+    if (this.mode === 'practice') {
+      this.sfx.levelComplete();
+      this.setState('practiceDone');
+      return;
+    }
 
     const cleared = this.levelIndex + 1;
     const complete = cleared >= LEVELS.length;
@@ -218,6 +261,7 @@ export class Game {
       deaths: this.deaths,
       durationMs: Math.round(this.runTime * 1000),
       complete,
+      mode: this.mode,
     });
   }
 
@@ -238,7 +282,7 @@ export class Game {
         if (confirm) {
           this.sfx.unlock();
           this.sfx.select();
-          this.startRun();
+          this.startCampaign();
         }
         break;
 
@@ -254,7 +298,19 @@ export class Game {
         break;
 
       case 'dying':
-        if (this.stateTime >= DEATH_FREEZE) this.restartLevel();
+        if (this.stateTime >= DEATH_FREEZE) {
+          // One life only, so the run is over instead of restarting.
+          if (this.mode === 'sudden') this.setState('gameOver');
+          else this.restartLevel();
+        }
+        break;
+
+      case 'gameOver':
+      case 'practiceDone':
+        if (confirm) {
+          this.sfx.select();
+          this.setState('title');
+        }
         break;
 
       case 'levelComplete':
@@ -267,7 +323,7 @@ export class Game {
       case 'finished':
         if (confirm) {
           this.sfx.select();
-          this.startRun();
+          this.setState('title');
         }
         break;
 
@@ -340,7 +396,7 @@ export class Game {
     }
 
     this.runTime += dt;
-    this.level.advance(dt);
+    this.level.advance(dt, this.player.x, this.player.y);
     this.player.update(dt, this.moveAxis(), this.level);
 
     const half = this.player.half;
@@ -364,16 +420,9 @@ export class Game {
     }
 
     // Enemy hit
-    for (const enemy of this.level.enemies) {
-      const d2 = pointBoxDistanceSq(
-        enemy.pos.x,
-        enemy.pos.y,
-        this.player.x,
-        this.player.y,
-        half,
-        half,
-      );
-      if (d2 <= ENEMY_RADIUS * ENEMY_RADIUS) {
+    for (const hazard of this.level.hazards) {
+      const d2 = pointBoxDistanceSq(hazard.x, hazard.y, this.player.x, this.player.y, half, half);
+      if (d2 <= hazard.r * hazard.r) {
         this.die();
         return;
       }
@@ -488,7 +537,7 @@ export class Game {
 
     this.drawTeleports(ctx);
     this.drawCoins(ctx);
-    this.drawEnemies(ctx);
+    this.drawHazards(ctx);
     if (this.state !== 'dying') this.drawPlayer(ctx);
     this.particles.draw(ctx);
 
@@ -616,20 +665,52 @@ export class Game {
     }
   }
 
-  private drawEnemies(ctx: CanvasRenderingContext2D): void {
-    for (const enemy of this.level.enemies) {
-      const { x, y } = enemy.pos;
+  /** Every deadly circle, drawn by kind so they stay tellable apart. */
+  private drawHazards(ctx: CanvasRenderingContext2D): void {
+    for (const hazard of this.level.hazards) {
+      const { x, y, r } = hazard;
+
+      if (hazard.kind === 'pulse') {
+        // Faint halo showing how far it can reach.
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, TAU);
+        ctx.fillStyle = COLORS.enemy;
+        ctx.globalAlpha = 0.22 + hazard.t * 0.25;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = COLORS.wallLine;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(x, y, Math.min(7, r), 0, TAU);
+        ctx.fillStyle = COLORS.enemy;
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        continue;
+      }
 
       ctx.beginPath();
-      ctx.arc(x, y, ENEMY_RADIUS, 0, TAU);
+      ctx.arc(x, y, r, 0, TAU);
       ctx.fillStyle = COLORS.enemy;
       ctx.fill();
-      ctx.lineWidth = 3;
+      ctx.lineWidth = hazard.kind === 'bullet' ? 2 : 3;
       ctx.strokeStyle = COLORS.wallLine;
       ctx.stroke();
 
+      if (hazard.kind === 'chaser') {
+        // A second ring marks the one enemy that follows you.
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.55, 0, TAU);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = COLORS.enemyHi;
+        ctx.stroke();
+        continue;
+      }
+
       ctx.beginPath();
-      ctx.arc(x - ENEMY_RADIUS * 0.3, y - ENEMY_RADIUS * 0.35, ENEMY_RADIUS * 0.3, 0, TAU);
+      ctx.arc(x - r * 0.3, y - r * 0.35, r * 0.3, 0, TAU);
       ctx.fillStyle = COLORS.enemyHi;
       ctx.fill();
     }
@@ -725,8 +806,15 @@ export class Game {
 
       const right = PAUSE_BUTTON.x - 10;
       this.text(ctx, this.level.name, right, 24, FONT_BODY_BOLD, COLORS.ink, 'right');
-      const record = this.best === null ? 'Best run: none yet' : `Best run: ${this.best} deaths`;
-      this.text(ctx, record, right, 43, FONT_BODY, COLORS.inkMuted, 'right');
+      const note =
+        this.mode === 'campaign'
+          ? this.best === null
+            ? 'Best run: none yet'
+            : `Best run: ${this.best} deaths`
+          : this.mode === 'sudden'
+            ? 'Sudden death — one life'
+            : 'Practice — not ranked';
+      this.text(ctx, note, right, 43, FONT_BODY, COLORS.inkMuted, 'right');
     }
 
     this.drawPauseButton(ctx);
@@ -826,10 +914,21 @@ export class Game {
       case 'ready':
         this.dialog(
           ctx,
-          `Level ${this.levelIndex + 1} of ${LEVELS.length}`,
+          this.mode === 'practice'
+            ? `Practice — level ${this.levelIndex + 1}`
+            : `${MODE_LABELS[this.mode]} — level ${this.levelIndex + 1} of ${LEVELS.length}`,
           [
             { text: this.level.name, font: FONT_HEAD },
             { text: this.level.hint, font: FONT_BODY, color: COLORS.inkMuted, space: 12 },
+            ...(this.mode === 'sudden'
+              ? [
+                  {
+                    text: 'One hit ends the run.',
+                    font: FONT_BODY_BOLD,
+                    space: 8,
+                  },
+                ]
+              : []),
           ],
           'Space or tap',
         );
@@ -884,6 +983,39 @@ export class Game {
 
       case 'paused':
         this.dialog(ctx, 'Paused', [{ text: 'PAUSED', font: FONT_HEAD }], 'Space, P or tap');
+        break;
+
+      case 'gameOver':
+        this.dialog(
+          ctx,
+          'Sudden death',
+          [
+            { text: 'ONE HIT WAS ENOUGH', font: FONT_HEAD },
+            {
+              text: `You got to level ${this.levelIndex + 1} of ${LEVELS.length} in ${formatTime(this.runTime)}.`,
+              font: FONT_BODY,
+              space: 12,
+            },
+          ],
+          'Back to the menu',
+        );
+        break;
+
+      case 'practiceDone':
+        this.dialog(
+          ctx,
+          'Practice',
+          [
+            { text: 'LEVEL CLEARED', font: FONT_HEAD },
+            {
+              text: `${this.deaths} deaths in ${formatTime(this.runTime)}. Practice is never ranked.`,
+              font: FONT_BODY,
+              color: COLORS.inkMuted,
+              space: 12,
+            },
+          ],
+          'Back to the menu',
+        );
         break;
 
       case 'playing':

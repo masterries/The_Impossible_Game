@@ -32,6 +32,19 @@ The Fullscreen button hides the page around the game and asks for landscape. Whe
 Fullscreen API is unavailable, most notably iOS Safari, a CSS-only immersive mode does the
 same job inside the browser window.
 
+### Modes
+
+| Mode         | What it is                                                                     |
+| ------------ | ------------------------------------------------------------------------------ |
+| Campaign     | All twelve levels in order. Ranked on the campaign board.                       |
+| Sudden death | Same levels, one hit ends the run. Its own board, where a finished run means zero deaths, so it ranks by time. |
+| Practice     | Any single level, picked from the grid under the game. Never submitted anywhere. |
+
+### Themes
+
+Classic, Midnight, Paper and Neon. They only swap colours, the beveled window look stays,
+and the choice is kept in localStorage.
+
 ### Mechanics
 
 Levels 1 and 2 are plain. After that a mechanic joins every few levels and they start
@@ -42,6 +55,19 @@ combining.
 | 3          | Conveyors   | Striped tiles drag you at 110 px/s. You can walk against them, just not quickly.  |
 | 5          | Gates       | Two groups of red doors take turns. Standing in one when it closes kills you, and it blinks first. |
 | 9          | Teleporters | Matching rings are pairs. Step on one and you come out of the other.              |
+
+### Enemies
+
+| Kind    | Behaviour                                                                            |
+| ------- | ------------------------------------------------------------------------------------ |
+| Ball    | The classic blue circle on a line, a polyline or a ring.                             |
+| Pulse   | Sits still and breathes: the deadly radius grows and shrinks on a cycle.              |
+| Turret  | Fires a bullet along one axis every few seconds. Bullets are not objects, the live ones follow from the firing interval. |
+| Chaser  | Wakes up after a delay and homes in on you. Slower than the player, so it is pressure rather than a death sentence. |
+
+Everything except the chaser is a pure function of the level time. The chaser is the one
+piece of state in a level, and therefore the one thing that cannot be memorised as a fixed
+pattern. It is reset along with the level on every death.
 
 ## Developing
 
@@ -86,6 +112,9 @@ sorted by fewest deaths first, then by the faster time.
 The server owns the level count, so a client cannot claim completion early. It defaults to
 12 and can be overridden with the `LEVEL_COUNT` environment variable if you add levels.
 
+Campaign and sudden death have separate boards. Practice runs are never sent, and the
+server rejects `mode: practice` outright rather than trusting the client about it.
+
 One row per run, not per player. A new run means a new row, so a bad attempt does not
 overwrite a good one. If no name is entered, the game picks one like `Player 4821` rather
 than dropping the run.
@@ -93,7 +122,7 @@ than dropping the run.
 | Route                   | Method | Purpose                                                     |
 | ----------------------- | ------ | ----------------------------------------------------------- |
 | `/api/health`           | GET    | Liveness, also used by the container healthcheck            |
-| `/api/scores?limit=10`  | GET    | Ranked entries plus the unranked ones                       |
+| `/api/scores?mode=campaign&limit=10` | GET | Ranked entries plus the unranked ones, per mode    |
 | `/api/runs`             | POST   | Issues a ticket for a run that is about to start             |
 | `/api/scores`           | POST   | Creates or updates this run's entry, needs a valid ticket    |
 | `/api/scores/<id>`      | DELETE | Removes one entry, needs `x-admin-token`                    |
@@ -254,7 +283,7 @@ src/
     types.ts       level and enemy data model
     levels.ts      the twelve levels
     level.ts       a loaded level: tiles, coins, zones, enemies
-    enemy.ts       movement along polylines and circles
+    enemy.ts       the four enemy kinds, each emitting deadly circles
     player.ts      movement and wall collision
     particles.ts   death and coin effects
     game.ts        state machine, collisions, rendering

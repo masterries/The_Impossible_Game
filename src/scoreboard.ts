@@ -20,7 +20,10 @@ export interface ScoreEntry {
   updatedAt: number;
 }
 
+export type BoardMode = 'campaign' | 'sudden';
+
 export interface Board {
+  mode: BoardMode;
   scores: ScoreEntry[];
   unranked: ScoreEntry[];
   levelCount: number;
@@ -73,8 +76,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export function fetchScores(limit = 10): Promise<Board> {
-  return request(`/scores?limit=${limit}`);
+export function fetchScores(mode: BoardMode = 'campaign', limit = 10): Promise<Board> {
+  return request(`/scores?mode=${mode}&limit=${limit}`);
 }
 
 /** Asks the server for a ticket that proves how long the run actually took. */
@@ -87,6 +90,7 @@ export function submitScore(input: {
   deaths: number;
   durationMs: number;
   levels: number;
+  mode: BoardMode;
   ticket: RunTicket;
 }): Promise<SubmitResult> {
   return request('/scores', {
@@ -96,6 +100,7 @@ export function submitScore(input: {
       deaths: input.deaths,
       durationMs: input.durationMs,
       levels: input.levels,
+      mode: input.mode,
       runId: input.ticket.runId,
       issuedAt: input.ticket.issuedAt,
       ticket: input.ticket.ticket,

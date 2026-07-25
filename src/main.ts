@@ -1,16 +1,27 @@
 import './style.css';
+import { applyTheme, type ThemeName } from './game/config';
 import { Game, type RunProgress } from './game/game';
+import { LEVELS } from './game/levels';
 import {
   fetchScores,
   formatDuration,
   startRun,
   submitScore,
+  type BoardMode,
   type RunTicket,
   type ScoreEntry,
 } from './scoreboard';
 
 const NAME_KEY = 'impossible-game.player-name';
+const THEME_KEY = 'impossible-game.theme';
 const BOARD_SIZE = 10;
+const THEMES: readonly ThemeName[] = ['classic', 'midnight', 'paper', 'neon'];
+
+// The theme has to be applied before the game paints its first frame.
+const storedTheme = localStorage.getItem(THEME_KEY) as ThemeName | null;
+const initialTheme: ThemeName =
+  storedTheme && THEMES.includes(storedTheme) ? storedTheme : 'classic';
+applyTheme(initialTheme);
 
 const canvas = must<HTMLCanvasElement>('#game');
 const nameInput = must<HTMLInputElement>('#player-name');
@@ -20,6 +31,10 @@ const scoreForm = must<HTMLFormElement>('#score-form');
 const soundToggle = must<HTMLButtonElement>('#sound-toggle');
 const fullscreenToggle = must<HTMLButtonElement>('#fullscreen-toggle');
 const exitImmersive = must<HTMLButtonElement>('#exit-immersive');
+const themeSelect = must<HTMLSelectElement>('#theme-select');
+const levelGrid = must<HTMLDivElement>('#level-grid');
+const startCampaign = must<HTMLButtonElement>('#start-campaign');
+const startSudden = must<HTMLButtonElement>('#start-sudden');
 
 const game = new Game(canvas);
 
@@ -29,6 +44,8 @@ let ticket: RunTicket | null = null;
 let ownEntryId: number | null = null;
 /** Progress whose submission failed, kept so Refresh can retry it. */
 let pending: RunProgress | null = null;
+/** Which board is on screen. Practice runs never appear on either. */
+let boardMode: BoardMode = 'campaign';
 
 /* -------------------------------------------------------------------------- */
 /* Scoreboard                                                                  */
@@ -77,7 +94,7 @@ function addSeparator(text: string): void {
 async function refreshBoard(quiet = false): Promise<void> {
   if (!quiet) setStatus('Loading scoreboard…');
   try {
-    const board = await fetchScores(BOARD_SIZE);
+    const board = await fetchScores(boardMode, BOARD_SIZE);
     boardBody.replaceChildren();
 
     for (const entry of board.scores) addRow(entry, board.levelCount);
@@ -146,10 +163,13 @@ async function handleProgress(progress: RunProgress): Promise<void> {
       deaths: progress.deaths,
       durationMs: progress.durationMs,
       levels: progress.levels,
+      mode: progress.mode,
       ticket,
     });
     ownEntryId = result.id;
     pending = null;
+    // Show the board this run belongs to.
+    if (boardMode !== progress.mode) setBoardMode(progress.mode, false);
 
     setStatus(
       result.complete
@@ -165,6 +185,66 @@ async function handleProgress(progress: RunProgress): Promise<void> {
     );
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Modes, level select and themes                                              */
+/* -------------------------------------------------------------------------- */
+
+function setBoardMode(mode: BoardMode, reload = true): void {
+  boardMode = mode;
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-board-mode]')) {
+    tab.setAttribute('aria-pressed', String(tab.dataset.boardMode === mode));
+  }
+  if (reload) void refreshBoard();
+}
+
+for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-board-mode]')) {
+  tab.addEventListener('click', () => {
+    setBoardMode(tab.dataset.boardMode === 'sudden' ? 'sudden' : 'campaign');
+    tab.blur();
+  });
+}
+
+// One button per level, all unlocked: practice is a sandbox, not a reward.
+LEVELS.forEach((level, index) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'button';
+  button.textContent = String(index + 1);
+  button.title = `Practice level ${index + 1}: ${level.name}`;
+  button.addEventListener('click', () => {
+    button.blur();
+    canvas.focus({ preventScroll: true });
+    game.sfx.unlock();
+    game.startPractice(index);
+    setStatus(`Practising level ${index + 1}: ${level.name}. This run is not ranked.`);
+  });
+  levelGrid.append(button);
+});
+
+startCampaign.addEventListener('click', () => {
+  startCampaign.blur();
+  canvas.focus({ preventScroll: true });
+  game.sfx.unlock();
+  game.startCampaign();
+});
+
+startSudden.addEventListener('click', () => {
+  startSudden.blur();
+  canvas.focus({ preventScroll: true });
+  game.sfx.unlock();
+  game.startSudden();
+  setBoardMode('sudden');
+});
+
+themeSelect.value = initialTheme;
+themeSelect.addEventListener('change', () => {
+  const chosen = themeSelect.value as ThemeName;
+  const theme = THEMES.includes(chosen) ? chosen : 'classic';
+  applyTheme(theme);
+  localStorage.setItem(THEME_KEY, theme);
+  themeSelect.blur();
+});
 
 /* -------------------------------------------------------------------------- */
 /* Wiring                                                                      */

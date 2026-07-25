@@ -31,9 +31,31 @@
           Fullscreen
         </button>
         <button id="sound-toggle" class="button" type="button" aria-pressed="true">Sound: on</button>
+        <label class="toolbar__field" for="theme-select">
+          Theme
+          <select id="theme-select">
+            <option value="classic">Classic</option>
+            <option value="midnight">Midnight</option>
+            <option value="paper">Paper</option>
+            <option value="neon">Neon</option>
+          </select>
+        </label>
         <span class="toolbar__note">
           Drag anywhere on the field to steer. Sound starts after your first input.
         </span>
+      </div>
+
+      <div class="modes">
+        <h2>Modes</h2>
+        <div class="modes__row">
+          <button id="start-campaign" class="button" type="button">Campaign &mdash; all 12 levels</button>
+          <button id="start-sudden" class="button" type="button">Sudden death &mdash; one hit</button>
+        </div>
+        <p class="modes__note">
+          Campaign and sudden death have their own scoreboard. Practice a single level below;
+          it is never ranked.
+        </p>
+        <div class="level-grid" id="level-grid" role="group" aria-label="Practice a level"></div>
       </div>
 
       <div class="columns">
@@ -81,6 +103,15 @@
 
       <div class="board">
         <h2>Scoreboard</h2>
+
+        <div class="board__tabs" role="group" aria-label="Scoreboard mode">
+          <button class="button" type="button" data-board-mode="campaign" aria-pressed="true">
+            Campaign
+          </button>
+          <button class="button" type="button" data-board-mode="sudden" aria-pressed="false">
+            Sudden death
+          </button>
+        </div>
 
         <form class="board__form" id="score-form" autocomplete="off">
           <label for="player-name">Your name</label>

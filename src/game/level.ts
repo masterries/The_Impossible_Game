@@ -1,5 +1,5 @@
 import { COLS, GATE_CYCLE, GATE_WARN, ROWS, TILE } from './config';
-import { Enemy } from './enemy';
+import { createEnemy, type Enemy, type Hazard } from './enemy';
 import {
   Push,
   PUSH_VECTORS,
@@ -52,6 +52,8 @@ export class Level {
   readonly pushes: PushKind[];
   readonly coins: Coin[] = [];
   readonly enemies: Enemy[];
+  /** Deadly circles for the current frame, rebuilt by `advance`. */
+  readonly hazards: Hazard[] = [];
   readonly start: Rect;
   readonly end: Rect;
   readonly spawnX: number;
@@ -175,7 +177,7 @@ export class Level {
     this.spawnX = this.start.x + this.start.w / 2;
     this.spawnY = this.start.y + this.start.h / 2;
 
-    this.enemies = def.enemies.map((spec) => new Enemy(spec));
+    this.enemies = def.enemies.map(createEnemy);
   }
 
   /* ---------------------------------------------------------------- *
@@ -271,16 +273,19 @@ export class Level {
     return this.collectedCoins === this.coins.length;
   }
 
-  /** Resets time and coins, after a death or a manual restart. */
-  reset(): void {
+  /** Resets time, coins and stateful enemies after a death or a restart. */
+  reset(playerX = this.spawnX, playerY = this.spawnY): void {
     this.time = 0;
     for (const coin of this.coins) coin.collected = false;
-    this.advance(0);
+    for (const enemy of this.enemies) enemy.reset();
+    this.advance(0, playerX, playerY);
   }
 
-  /** Moves every enemy to the current level time. */
-  advance(dt: number): void {
+  /** Advances the level time and rebuilds the hazard list for this frame. */
+  advance(dt: number, playerX = this.spawnX, playerY = this.spawnY): void {
     this.time += dt;
-    for (const enemy of this.enemies) enemy.positionAt(this.time);
+    this.hazards.length = 0;
+    const ctx = { time: this.time, dt, playerX, playerY };
+    for (const enemy of this.enemies) enemy.emit(ctx, this.hazards);
   }
 }
